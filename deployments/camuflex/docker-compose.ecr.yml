@@ -1,0 +1,38 @@
+# Overlay que reemplaza las imágenes oficiales de Docker Hub por las que este
+# fork construye y publica en ECR. Se usa junto al compose de upstream:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.ecr.yml ...
+#
+# Se mantiene como overlay separado —y no como edición del compose de
+# upstream— para que rebasar sobre makeplane/plane no genere conflictos.
+#
+# ECR_REGISTRY e IMAGE_TAG los inyecta deploy.sh en plane.env.
+
+services:
+  web:
+    image: ${ECR_REGISTRY}/plane-frontend:${IMAGE_TAG}
+
+  space:
+    image: ${ECR_REGISTRY}/plane-space:${IMAGE_TAG}
+
+  admin:
+    image: ${ECR_REGISTRY}/plane-admin:${IMAGE_TAG}
+
+  live:
+    image: ${ECR_REGISTRY}/plane-live:${IMAGE_TAG}
+
+  # api, worker, beat-worker y migrator comparten la imagen del backend.
+  api:
+    image: ${ECR_REGISTRY}/plane-backend:${IMAGE_TAG}
+
+  worker:
+    image: ${ECR_REGISTRY}/plane-backend:${IMAGE_TAG}
+
+  beat-worker:
+    image: ${ECR_REGISTRY}/plane-backend:${IMAGE_TAG}
+
+  migrator:
+    image: ${ECR_REGISTRY}/plane-backend:${IMAGE_TAG}
+
+  proxy:
+    image: ${ECR_REGISTRY}/plane-proxy:${IMAGE_TAG}

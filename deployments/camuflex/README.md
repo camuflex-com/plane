@@ -1,0 +1,101 @@
+# CI/CD del Plane self-hosted
+
+Pipeline que construye las imágenes de este fork, las publica en **ECR** y las
+despliega en la instancia **EC2** vía **SSM**.
+
+```
+push a preview
+   │
+   ├─ build (6 jobs en paralelo)  ──►  ECR  (tags: sha-<12> y latest)
+   │
+   └─ deploy  ──►  SSM SendCommand  ──►  EC2
+                                          │
+                                          ├─ login ECR (rol de instancia)
+                                          ├─ pull de las 6 imágenes
+                                          ├─ up de infra (db, redis, mq, minio)
+                                          ├─ migraciones (bloquea si fallan)
+                                          ├─ up de la aplicación
+                                          └─ health check ─► rollback si falla
+```
+
+## Por qué así
+
+- **OIDC en vez de llaves.** GitHub asume un rol de AWS con un token efímero.
+  No hay `AWS_ACCESS_KEY_ID` ni llave SSH guardada en el repositorio.
+- **SSM en vez de SSH.** El despliegue no abre ni usa el puerto 22, y el
+  permiso está acotado a un `SendCommand` sobre una sola instancia.
+- **Overlay en vez de fork del compose.** `docker-compose.ecr.yml` solo
+  reemplaza los `image:`. El compose de upstream queda intacto, así rebasar
+  sobre `makeplane/plane` no genera conflictos.
+- **Los archivos viajan en el comando.** El workflow manda compose, overlay y
+  `deploy.sh` en base64 dentro del propio `SendCommand`, así que la instancia
+  corre exactamente lo que hay en el commit desplegado y no necesita acceso al
+  repositorio.
+
+## Variables de repositorio
+
+`Settings > Secrets and variables > Actions > Variables` (pestaña *Variables*,
+no *Secrets*: ninguno de estos valores es sensible — el rol es inútil sin la
+condición de confianza OIDC).
+
+| Variable | Valor |
+|---|---|
+| `AWS_REGION` | `us-east-1` |
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::482545836518:role/plane-github-actions-deploy` |
+| `ECR_REGISTRY` | `482545836518.dkr.ecr.us-east-1.amazonaws.com` |
+| `EC2_INSTANCE_ID` | `i-09ff0ee64a00c4195` |
+| `HEALTH_HOST` | `plane.camuflex.com` |
+
+El job `deploy` usa el environment `production`. Si no existe, GitHub lo crea
+al primer run; puedes añadirle *required reviewers* para exigir aprobación
+manual antes de cada despliegue.
+
+## Confianza OIDC
+
+El rol solo acepta tokens de este repositorio y de estos dos `sub`:
+
+```
+repo:camuflex-com/plane:ref:refs/heads/preview
+repo:camuflex-com/plane:environment:production
+```
+
+Una rama distinta no puede desplegar. Para habilitar otra, hay que añadirla a
+la trust policy del rol.
+
+## Uso
+
+- **Automático:** cada push a `preview` que toque código (se ignoran `**.md`
+  y `docs/**`).
+- **Manual:** `Actions > Deploy self-hosted > Run workflow`. Si dejas
+  `image_tag` vacío, construye desde el commit actual. Si pones un tag que ya
+  existe en ECR (por ejemplo `sha-abc123456789`), se salta el build y solo
+  despliega — esa es la vía rápida para volver a una versión anterior.
+
+## Rollback
+
+El despliegue revierte solo si el health check no pasa tras 30 intentos
+(5 minutos). Para revertir a mano, corre el workflow con el `image_tag`
+anterior, o directamente en la instancia:
+
+```bash
+ssh -i ~/.ssh/plane-selfhost.pem ubuntu@plane.camuflex.com
+grep PREVIOUS_IMAGE_TAG /opt/plane-app/plane.env
+sudo bash /opt/plane-app/deploy.sh <tag-anterior>
+```
+
+## Nota sobre las migraciones
+
+`deploy.sh` corre el migrator **antes** de actualizar la aplicación y aborta
+sin tocar los servicios si falla. Esto protege contra desplegar código que
+espera un esquema que no se aplicó, pero no protege contra migraciones
+destructivas: no hay snapshot automático de la base. Antes de un cambio de
+esquema arriesgado, saca un backup (`docker run --rm -v plane-app_pgdata:...`)
+o un snapshot EBS del volumen.
+
+## Lo que NO cubre
+
+- Los servicios de infraestructura (postgres, redis, rabbitmq, minio) siguen
+  usando sus imágenes oficiales y no los toca el pipeline.
+- No hay entorno de staging: `preview` despliega directo a producción.
+- La base de datos vive en el disco de la instancia. Un `terminate` se lleva
+  los datos; el volumen es `DeleteOnTermination=true`.
