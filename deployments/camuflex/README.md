@@ -58,11 +58,31 @@ manual antes de cada despliegue.
 
 ## Confianza OIDC
 
-El rol solo acepta tokens de este repositorio y de estos dos `sub`:
+El rol solo acepta tokens de este repositorio, y solo desde `preview` o desde
+el environment `production`:
 
 ```
+repo:camuflex-com@319952952/plane@1343116864:ref:refs/heads/preview
+repo:camuflex-com@319952952/plane@1343116864:environment:production
 repo:camuflex-com/plane:ref:refs/heads/preview
 repo:camuflex-com/plane:environment:production
+```
+
+Los `@<id>` no son un error. Esta organización tiene activado el **formato
+inmutable del subject claim**: GitHub inyecta el ID numérico de la org
+(`319952952`) y del repo (`1343116864`) dentro del `sub`. Es más seguro que el
+formato clásico —renombrar la org o el repo no permite suplantar la
+identidad—, pero rompe cualquier trust policy escrita con el patrón de
+siempre, con un `AccessDenied` genérico que no dice por qué.
+
+Se dejan las cuatro variantes para que siga funcionando si el flag se
+desactiva. Para ver el `sub` real que se está presentando:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --max-results 1 --query 'Events[0].CloudTrailEvent' --output text \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["userIdentity"]["userName"])'
 ```
 
 Una rama distinta no puede desplegar. Para habilitar otra, hay que añadirla a
