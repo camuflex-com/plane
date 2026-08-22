@@ -7,13 +7,16 @@ name: Deploy self-hosted
 # guardadas en GitHub. El rol solo puede empujar a los 6 repos de ECR y mandar
 # un SendCommand a esa única instancia.
 #
-# Variables de repositorio requeridas (Settings > Secrets and variables >
-# Actions > Variables). Ver deployments/camuflex/README.md.
-#   AWS_REGION          us-east-1
-#   AWS_DEPLOY_ROLE_ARN arn:aws:iam::<cuenta>:role/plane-github-actions-deploy
-#   ECR_REGISTRY        <cuenta>.dkr.ecr.us-east-1.amazonaws.com
-#   EC2_INSTANCE_ID     i-xxxxxxxxxxxxxxxxx
-#   HEALTH_HOST         plane.camuflex.com
+# Configuración requerida (ver deployments/camuflex/README.md):
+#   AWS_REGION           us-east-1
+#   AWS_DEPLOY_ROLE_ARN  arn:aws:iam::<cuenta>:role/plane-github-actions-deploy
+#   ECR_REGISTRY         <cuenta>.dkr.ecr.us-east-1.amazonaws.com
+#   EC2_INSTANCE_ID      i-xxxxxxxxxxxxxxxxx
+#   HEALTH_HOST          plane.camuflex.com
+#
+# Se aceptan como Variables o como Secrets, pero tienen que estar a nivel de
+# REPOSITORIO: los jobs de build no declaran environment y no verían las que
+# estén acotadas al environment 'production'.
 
 on:
   push:
@@ -38,14 +41,44 @@ permissions:
   contents: read
   id-token: write
 
+# Se resuelven una sola vez aquí para no repetir el fallback en cada uso.
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
+  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY || secrets.ECR_REGISTRY }}
+  EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID || secrets.EC2_INSTANCE_ID }}
+  HEALTH_HOST: ${{ vars.HEALTH_HOST || secrets.HEALTH_HOST }}
+
 jobs:
   setup:
-    name: Resolver tag
+    name: Verificar y resolver tag
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
       needs_build: ${{ steps.tag.outputs.needs_build }}
     steps:
+      # Falla acá con un mensaje útil en vez de dejar que reviente más
+      # adelante con "Input required and not supplied: aws-region".
+      - name: Verificar configuración
+        run: |
+          missing=""
+          [ -n "${AWS_REGION:-}" ]          || missing="$missing AWS_REGION"
+          [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ] || missing="$missing AWS_DEPLOY_ROLE_ARN"
+          [ -n "${ECR_REGISTRY:-}" ]        || missing="$missing ECR_REGISTRY"
+          [ -n "${EC2_INSTANCE_ID:-}" ]     || missing="$missing EC2_INSTANCE_ID"
+          [ -n "${HEALTH_HOST:-}" ]         || missing="$missing HEALTH_HOST"
+          if [ -n "$missing" ]; then
+            echo "::error::Falta configurar:$missing"
+            echo ""
+            echo "Settings > Secrets and variables > Actions."
+            echo "Sirven tanto la pestaña Variables como Secrets, pero deben"
+            echo "estar a nivel de repositorio, no acotadas a un environment."
+            echo ""
+            echo "Los valores están en deployments/camuflex/README.md."
+            exit 1
+          fi
+          echo "Configuración completa."
+
       - id: tag
         run: |
           if [ -n "${{ inputs.image_tag }}" ]; then
@@ -63,7 +96,9 @@ jobs:
     if: needs.setup.outputs.needs_build == 'true'
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      # Sin fail-fast: si una imagen falla, las otras terminan igual y su
+      # capa de caché queda guardada para el siguiente intento.
+      fail-fast: false
       matrix:
         include:
           - image: plane-frontend
@@ -88,15 +123,15 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Configurar credenciales AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login en ECR
         run: |
-          aws ecr get-login-password --region "${{ vars.AWS_REGION }}" \
-            | docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -110,15 +145,16 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ vars.ECR_REGISTRY }}/${{ matrix.image }}:${{ needs.setup.outputs.image_tag }}
-            ${{ vars.ECR_REGISTRY }}/${{ matrix.image }}:latest
+            ${{ env.ECR_REGISTRY }}/${{ matrix.image }}:${{ needs.setup.outputs.image_tag }}
+            ${{ env.ECR_REGISTRY }}/${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
 
   deploy:
     name: Desplegar en EC2
     needs: [setup, build]
-    # Corre también cuando se salta el build (despliegue de un tag existente).
+    # Corre también cuando se salta el build (despliegue de un tag existente),
+    # pero nunca si alguna imagen falló.
     if: always() && needs.setup.result == 'success' && needs.build.result != 'failure' && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     environment: production
@@ -126,21 +162,17 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Configurar credenciales AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Enviar despliegue por SSM
         id: send
         env:
           IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
-          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-          ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
-          HEALTH_HOST: ${{ vars.HEALTH_HOST }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
-          set -Eeuo pipefail
+          set -eu
 
           # Los archivos viajan en base64 dentro del propio comando SSM, así la
           # instancia corre siempre exactamente lo que hay en este commit y no
@@ -149,6 +181,7 @@ jobs:
           OVERLAY_B64=$(base64 -w0 deployments/camuflex/docker-compose.ecr.yml)
           DEPLOY_B64=$(base64 -w0 deployments/camuflex/deploy.sh)
 
+          # AWS-RunShellScript corre bajo /bin/sh (dash): nada de pipefail acá.
           jq -n \
             --arg compose "$COMPOSE_B64" \
             --arg overlay "$OVERLAY_B64" \
@@ -171,7 +204,7 @@ jobs:
             }' > /tmp/ssm-params.json
 
           CMD_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
+            --instance-ids "$EC2_INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --comment "Deploy $IMAGE_TAG desde GitHub Actions" \
             --parameters file:///tmp/ssm-params.json \
@@ -183,9 +216,8 @@ jobs:
       - name: Esperar resultado
         env:
           CMD_ID: ${{ steps.send.outputs.command_id }}
-          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
         run: |
-          set -Eeuo pipefail
+          set -eu
 
           # SSM tarda un instante en materializar la invocación.
           sleep 5
@@ -193,7 +225,7 @@ jobs:
           STATUS=Pending
           for _ in $(seq 1 240); do
             STATUS=$(aws ssm get-command-invocation \
-              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
               --query 'Status' --output text 2>/dev/null || echo Pending)
             case "$STATUS" in
               Success|Failed|Cancelled|TimedOut) break ;;
@@ -203,12 +235,12 @@ jobs:
 
           echo "::group::Salida del despliegue"
           aws ssm get-command-invocation \
-            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
             --query 'StandardOutputContent' --output text || true
           echo "::endgroup::"
 
           ERR=$(aws ssm get-command-invocation \
-            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
             --query 'StandardErrorContent' --output text || true)
           if [ -n "$ERR" ] && [ "$ERR" != "None" ]; then
             echo "::group::stderr"

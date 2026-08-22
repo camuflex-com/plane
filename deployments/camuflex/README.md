@@ -34,9 +34,15 @@ push a preview
 
 ## Variables de repositorio
 
-`Settings > Secrets and variables > Actions > Variables` (pestaña *Variables*,
-no *Secrets*: ninguno de estos valores es sensible — el rol es inútil sin la
-condición de confianza OIDC).
+`Settings > Secrets and variables > Actions`. Sirve tanto la pestaña
+*Variables* como *Secrets* — el workflow acepta las dos. Recomendadas como
+Variables: ninguno de estos valores es sensible, el rol es inútil sin la
+condición de confianza OIDC, y así se leen en los logs.
+
+> **Tienen que estar a nivel de repositorio.** Si las defines acotadas al
+> environment `production`, los jobs de `build` no las ven —no declaran
+> environment— y el run muere con
+> `Input required and not supplied: aws-region`.
 
 | Variable | Valor |
 |---|---|
@@ -91,6 +97,18 @@ espera un esquema que no se aplicó, pero no protege contra migraciones
 destructivas: no hay snapshot automático de la base. Antes de un cambio de
 esquema arriesgado, saca un backup (`docker run --rm -v plane-app_pgdata:...`)
 o un snapshot EBS del volumen.
+
+## Workflows heredados de upstream
+
+`build-branch.yml` (*Branch Build CE*) también se dispara en cada push a
+`preview` y publica en el Docker Hub de makeplane. En este fork fallaba
+siempre por falta de `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, y además
+duplicaba el trabajo: construye las mismas 6 imágenes. Quedó acotado con
+`if: github.repository == 'makeplane/plane'` en su primer job — como todos
+los demás dependen de él, el workflow entero se salta en el fork.
+
+Para reactivarlo habría que quitar ese guard y añadir los secrets de Docker
+Hub.
 
 ## Lo que NO cubre
 

@@ -50,6 +50,12 @@ env:
 jobs:
   branch_build_setup:
     name: Build Setup
+    # Este workflow publica en el Docker Hub de makeplane y necesita
+    # DOCKERHUB_USERNAME/DOCKERHUB_TOKEN, que este fork no tiene: fallaba en
+    # cada push a preview. En camuflex-com/plane lo sustituye
+    # deploy-selfhost.yml, que construye las mismas imágenes hacia ECR.
+    # Todos los demás jobs dependen de este, así que el guard los salta todos.
+    if: github.repository == 'makeplane/plane'
     runs-on: ubuntu-22.04
     outputs:
       gh_branch_name: ${{ steps.set_env_variables.outputs.TARGET_BRANCH }}
