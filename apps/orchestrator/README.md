@@ -11,9 +11,9 @@ orchestrator ── POST /v1/agents (autoCreatePR) ──► Cursor Cloud Agent
    │  webhook: pull_request.opened  ◄─── PR en GitHub ◄──┘
    │      → issue a In Review, comenta "bugbot run"
    │
-   │  webhook: check_run.completed (Bugbot)
-   │      success → merge → issue a Done
-   │      con hallazgos → issue a In Progress + follow-up al agente
+   │  webhook: pull_request_review.submitted (Bugbot)
+   │      APPROVED / 0 issues → merge → issue a Done
+   │      comentarios / N issues → issue a In Progress + follow-up al agente
    └───────────────────────────────────────────────────────┘
 ```
 
@@ -98,7 +98,7 @@ El estado se verifica además en el servidor contra el payload, no solo por
 configuración: si alguien añadiera otro estado al disparador, el orquestador
 lo rechaza en vez de lanzar un agente sobre una issue que no toca.
 
-En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request` y `check_run`.
+En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request` y **`pull_request_review`**. El check de CI de Bugbot no se usa: completa minutos antes de que existan los comentarios, y un `neutral` no significa que haya bugs.
 
 ### Permisos del `GITHUB_TOKEN`
 
@@ -110,9 +110,9 @@ Fine-grained PAT con _resource owner_ la organización, acotado al repo:
 | Pull requests | Read and write |
 | Metadata      | Read-only      |
 
-No hace falta **Checks**: el veredicto de Bugbot llega en el propio payload del
-webhook, y para el resto de la CI se usa `mergeable_state` del pull request,
-que cubre "Pull requests: read".
+No hace falta **Checks**: el veredicto de Bugbot llega como `pull_request_review`
+(aprobó o dejó comentarios), y para el resto de la CI se usa `mergeable_state`
+del pull request, que cubre "Pull requests: read".
 
 ### Autoría de los pull requests
 
@@ -128,28 +128,28 @@ El **merge** es otra cosa: lo hace el orquestador con `GITHUB_TOKEN`, así que
 el merge sí queda a nombre del dueño de ese token. Para que tampoco sea una
 persona haría falta una GitHub App propia en vez de un PAT.
 
-### El check de Bugbot llega antes que la revisión
+### El veredicto es la revisión, no el check
 
-Observado en producción: el `check_run` de Bugbot completó a las 19:01 y su
-revisión no apareció hasta las 19:07 —seis minutos después—. Actuar con el
-primero producía un comentario "(sin detalle)" y, peor, sacaba la run de
-`in_review`, de modo que el veredicto real llegaba tarde y se descartaba por
-las guardas de estado.
+El `check_run` de Bugbot completa **antes** de que existan comentarios —a
+veces seis minutos antes— y casi siempre llega como `neutral`. Tratarlo como
+veredicto aparcaba la run (o la mandaba a corregir con comentarios viejos)
+antes de que Bugbot hablara.
 
-Por eso, cuando el veredicto trae hallazgos, el orquestador **no actúa hasta
-tener el detalle**: reencola el trabajo cada 30 s (hasta 12 veces, 6 minutos)
-mientras la revisión no exista. Si se agota la espera **no aplica el
-veredicto**: la run se queda en `in_review` para que un check posterior (a
-menudo el `success` real) sí se procese. Aplicar un `neutral` vacío sacaba la
-run a `fixing` y el verde llegaba tarde, descartado por las guardas de estado.
+El orquestador **ignora los checks** y espera el evento `pull_request_review`
+de `cursor[bot]`:
 
-Tampoco se tratan como veredicto los checks cuyo nombre contiene "Cursor" pero
-no "Bugbot": el agente publica los suyos y un `neutral` de esos era el que
-disparaba el ciclo roto.
+- **APPROVED**, o el resumen dice `found 0 potential issues` → merge a main
+  e issue a Done.
+- **Comentarios en línea**, `CHANGES_REQUESTED`, o `found N>0` → issue a In
+  Progress con esas notas y follow-up al mismo agente.
+- Cualquier otra cosa se ignora: no hay límite de espera, el siguiente evento
+  de revisión es el que cuenta.
+
+Los hallazgos se leen de **esa** revisión, no de todo el PR, para no reutilizar
+comentarios de un intento anterior.
 
 Tras una corrección, el agente empuja al mismo PR (`synchronize`). Eso
-devuelve la run a `in_review`, vuelve a pedir Bugbot, y un `success` mergea
-aunque llegue todavía en `fixing`.
+devuelve la run a `in_review` y vuelve a pedir Bugbot.
 
 ## Límites conocidos
 

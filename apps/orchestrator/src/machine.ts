@@ -36,8 +36,9 @@ export type Event =
   | { type: "agent_stale"; minutes: number };
 
 /**
- * Bugbot publica un check de CI. `success` = limpio; `neutral` = encontró
- * cosas; `failure` = encontró cosas con fail-on-unresolved configurado.
+ * Bugbot envía una revisión de GitHub. `success` = aprobó o no encontró
+ * nada; `neutral` = encontró problemas. El check de CI no se usa: completa
+ * antes de que existan los comentarios.
  */
 export type BugbotConclusion = "success" | "neutral" | "failure" | "cancelled" | "timed_out";
 

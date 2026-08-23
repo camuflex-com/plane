@@ -2,7 +2,7 @@ import express, { Router, type Express } from "express";
 import { createApiRouter } from "@/api";
 import { claimDelivery, type Db } from "@/db";
 import type { Env } from "@/env";
-import { isBugbotCheck } from "@/executor";
+import { isBugbot } from "@/executor";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
 import { verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
@@ -117,11 +117,12 @@ type GitHubPayload = {
   action?: string;
   repository?: { name?: string; owner?: { login?: string } };
   pull_request?: { number?: number; head?: { sha?: string; ref?: string }; draft?: boolean };
-  check_run?: {
-    name?: string;
-    conclusion?: string;
-    head_sha?: string;
-    pull_requests?: { number?: number }[];
+  review?: {
+    id?: number;
+    state?: string;
+    body?: string | null;
+    commit_id?: string;
+    user?: { login?: string };
   };
 };
 
@@ -181,8 +182,10 @@ function isActionableGitHubEvent(eventName: string, payload: GitHubPayload): boo
     const action = payload.action ?? "";
     return PR_READY_ACTIONS.has(action) || PR_SYNC_ACTIONS.has(action);
   }
-  if (eventName === "check_run") {
-    return payload.action === "completed" && isBugbotCheck(payload.check_run?.name);
+  // El check_run de Bugbot completa minutos antes de la review. No se usa
+  // como veredicto: se espera a que Cursor[bot] envíe la revisión.
+  if (eventName === "pull_request_review") {
+    return payload.action === "submitted" && isBugbot(payload.review?.user?.login);
   }
   return false;
 }
@@ -227,26 +230,28 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
     return;
   }
 
-  if (eventName === "check_run" && payload.action === "completed") {
-    const check = payload.check_run;
-    const prNumber = check?.pull_requests?.[0]?.number;
-    const headSha = check?.head_sha;
-
-    // `pull_requests` viene vacío con frecuencia en los payloads de check_run.
-    // El sha sí está siempre, y la run guarda el suyo, así que sirve de
-    // respaldo para no perder el veredicto.
-    if (!prNumber && !headSha) {
-      logger.warn("veredicto sin PR ni sha, no se puede asociar", { owner, repo, name: check?.name });
+  if (eventName === "pull_request_review" && payload.action === "submitted") {
+    const prNumber = payload.pull_request?.number;
+    const review = payload.review;
+    if (!prNumber || !review?.id) {
+      logger.warn("revisión de Bugbot sin PR o sin id, se ignora", { owner, repo });
       return;
     }
-
-    await enqueue(db, "github.check_completed", {
+    await enqueue(db, "github.bugbot_review", {
       owner,
       repo,
-      prNumber: prNumber ?? null,
-      headSha: headSha ?? null,
-      conclusion: check?.conclusion ?? "neutral",
+      prNumber,
+      headSha: review.commit_id ?? payload.pull_request?.head?.sha ?? null,
+      reviewId: review.id,
+      state: review.state ?? "",
+      body: review.body ?? "",
     });
-    logger.info("veredicto encolado", { owner, repo, prNumber, headSha, conclusion: check?.conclusion });
+    logger.info("revisión de Bugbot encolada", {
+      owner,
+      repo,
+      prNumber,
+      reviewId: review.id,
+      state: review.state,
+    });
   }
 }

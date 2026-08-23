@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanFinding, isBugbot, isBugbotCheck } from "@/executor";
+import { cleanFinding, interpretBugbotReview, isBugbot, parseFoundCount } from "@/executor";
 
 // Cuerpos reales tomados del PR #3 de camuflex-backend.
 const REAL_INLINE = `### Log injection via driver identity
@@ -26,20 +26,41 @@ describe("autoría de Bugbot", () => {
   });
 });
 
-describe("check de CI de Bugbot", () => {
-  it("acepta el check de Bugbot", () => {
-    expect(isBugbotCheck("Bugbot")).toBe(true);
-    expect(isBugbotCheck("Cursor Bugbot")).toBe(true);
+describe("interpretación de la revisión de Bugbot", () => {
+  it("APPROVED es merge, aunque el cuerpo hable de issues", () => {
+    expect(interpretBugbotReview({ state: "approved", body: REAL_REVIEW, findings: [] }).kind).toBe("success");
   });
 
-  // El agente de Cursor publica checks cuyo nombre contiene "Cursor". Si se
-  // tratan como veredicto, un `neutral` prematuro saca la run de in_review y
-  // el success real de Bugbot se descarta.
-  it("no trata los checks del agente de Cursor como revisión", () => {
-    expect(isBugbotCheck("Cursor")).toBe(false);
-    expect(isBugbotCheck("Cursor Agent")).toBe(false);
-    expect(isBugbotCheck("github-actions")).toBe(false);
-    expect(isBugbotCheck(undefined)).toBe(false);
+  it("found 0 potential issues es merge", () => {
+    const body = "Cursor Bugbot has reviewed your changes and found 0 potential issues.";
+    expect(parseFoundCount(body)).toBe(0);
+    expect(interpretBugbotReview({ state: "commented", body, findings: [] }).kind).toBe("success");
+  });
+
+  it("found N>0 con el resumen, sin comentarios en línea todavía", () => {
+    expect(parseFoundCount(REAL_REVIEW)).toBe(2);
+    const d = interpretBugbotReview({ state: "commented", body: REAL_REVIEW, findings: [] });
+    expect(d.kind).toBe("findings");
+    expect(d.findings[0]).toContain("found 2 potential issues");
+  });
+
+  it("usa los comentarios en línea cuando existen", () => {
+    const d = interpretBugbotReview({
+      state: "commented",
+      body: REAL_REVIEW,
+      findings: ["iam.tf:12 — Log injection via driver identity"],
+    });
+    expect(d.kind).toBe("findings");
+    expect(d.findings).toEqual(["iam.tf:12 — Log injection via driver identity"]);
+  });
+
+  it("CHANGES_REQUESTED cuenta como hallazgos", () => {
+    expect(interpretBugbotReview({ state: "changes_requested", body: "", findings: ["x"] }).kind).toBe("findings");
+  });
+
+  it("una review vacía no dispara ni merge ni corrección", () => {
+    expect(interpretBugbotReview({ state: "commented", body: "", findings: [] }).kind).toBe("ignore");
+    expect(interpretBugbotReview({ state: "pending", body: REAL_REVIEW, findings: [] }).kind).toBe("ignore");
   });
 });
 

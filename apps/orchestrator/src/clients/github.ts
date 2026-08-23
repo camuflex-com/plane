@@ -60,21 +60,10 @@ export class GitHubClient {
     });
   }
 
-  /**
-   * Reviews del PR. Es la señal fiable de que Bugbot terminó: su check puede
-   * completar minutos antes de que publique la revisión.
-   */
-  async listReviews(owner: string, repo: string, prNumber: number) {
-    return requestJson<{ user: { login: string }; body: string; state: string; submitted_at: string }[]>(
-      this.repoUrl(owner, repo, `pulls/${prNumber}/reviews?per_page=100`),
-      { headers: this.headers }
-    );
-  }
-
-  /** Comentarios en línea del PR: de ahí sale el detalle de los hallazgos. */
-  async listReviewComments(owner: string, repo: string, prNumber: number) {
+  /** Comentarios en línea de UNA revisión: no se mezclan con reviews anteriores. */
+  async listCommentsForReview(owner: string, repo: string, prNumber: number, reviewId: number) {
     return requestJson<{ user: { login: string }; body: string; path: string; line: number | null }[]>(
-      this.repoUrl(owner, repo, `pulls/${prNumber}/comments?per_page=100`),
+      this.repoUrl(owner, repo, `pulls/${prNumber}/reviews/${reviewId}/comments?per_page=100`),
       { headers: this.headers }
     );
   }
