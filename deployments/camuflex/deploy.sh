@@ -53,6 +53,36 @@ compose() {
     "$@"
 }
 
+# `env_file` se resuelve al parsear el compose: si el archivo no existe, falla
+# TODO el `up`, no solo el orquestador. Se crea vacío para que la ausencia de
+# secretos degrade a un solo servicio caído en vez de tumbar Plane entero.
+ensure_orchestrator_env() {
+  local file="$APP_DIR/orchestrator.env"
+  if [ ! -f "$file" ]; then
+    log "ATENCION: falta orchestrator.env, se crea vacío (el orquestador no arrancará)"
+    : > "$file"
+    chmod 600 "$file"
+  fi
+}
+
+# El orquestador usa una base propia dentro del mismo Postgres. Separada de la
+# de Plane a propósito: así los backups y restores de Plane siguen siendo
+# independientes de la automatización.
+ensure_orchestrator_db() {
+  local pass
+  pass=$(env_get POSTGRES_PASSWORD)
+  local exists
+  exists=$(compose exec -T -e PGPASSWORD="$pass" plane-db \
+    psql -U plane -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='orchestrator'" </dev/null 2>/dev/null || true)
+  if [ "$(echo "$exists" | tr -d '[:space:]')" = "1" ]; then
+    log "base 'orchestrator' ya existe"
+    return
+  fi
+  log "creando la base 'orchestrator'"
+  compose exec -T -e PGPASSWORD="$pass" plane-db \
+    psql -U plane -d postgres -c "CREATE DATABASE orchestrator OWNER plane" </dev/null
+}
+
 health_ok() {
   # --resolve fuerza la conexión a loopback pero conserva SNI y Host, así se
   # valida la cadena TLS real sin depender de hairpinning por la IP elástica.
@@ -101,6 +131,19 @@ fi
 
 log "levantando infraestructura (db, redis, mq, minio)"
 compose up -d plane-db plane-redis plane-mq plane-minio
+
+# Antes de las migraciones de Plane: el orquestador aplica su propio esquema
+# al arrancar, pero la base tiene que existir primero.
+ensure_orchestrator_env
+ensure_orchestrator_db
+
+# Plane bloquea por defecto los webhooks hacia IPs privadas (protección SSRF).
+# El orquestador vive en la red interna, así que su host tiene que estar
+# explícitamente permitido o Plane rechaza la URL al guardarla.
+if ! grep -q 'orchestrator.internal' "$ENV_FILE"; then
+  log "permitiendo orchestrator.internal como destino de webhooks"
+  env_set WEBHOOK_ALLOWED_HOSTS "orchestrator.internal"
+fi
 
 log "ejecutando migraciones"
 if ! compose run --rm migrator; then

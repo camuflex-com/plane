@@ -11,6 +11,8 @@
 	
 	reverse_proxy /live/* live:3000
 
+	reverse_proxy /automation/* orchestrator:3100
+
 	reverse_proxy /api/* api:8000
 
 	reverse_proxy /auth/* api:8000

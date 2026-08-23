@@ -36,3 +36,30 @@ services:
 
   proxy:
     image: ${ECR_REGISTRY}/plane-proxy:${IMAGE_TAG}
+
+  # Orquestador de automatización: Plane -> Cursor -> GitHub -> Plane.
+  #
+  # Se define solo aquí, no en el compose de upstream, porque es un servicio
+  # nuestro. Compose fusiona ambos archivos, así que un servicio que existe
+  # únicamente en el overlay funciona igual.
+  orchestrator:
+    image: ${ECR_REGISTRY}/plane-orchestrator:${IMAGE_TAG}
+    env_file:
+      - orchestrator.env
+    environment:
+      PORT: 3100
+      PLANE_BASE_URL: ${WEB_URL}
+    networks:
+      default:
+        # Alias con punto a propósito: Django valida la URL del webhook con
+        # URLValidator, que rechaza los hostnames de una sola etiqueta. Con
+        # `orchestrator` a secas, Plane responde "Enter a valid URL".
+        aliases:
+          - orchestrator.internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    depends_on:
+      - plane-db
+      - api

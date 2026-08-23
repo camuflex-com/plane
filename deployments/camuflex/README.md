@@ -35,7 +35,7 @@ push a preview
 ## Variables de repositorio
 
 `Settings > Secrets and variables > Actions`. Sirve tanto la pestaña
-*Variables* como *Secrets* — el workflow acepta las dos. Recomendadas como
+_Variables_ como _Secrets_ — el workflow acepta las dos. Recomendadas como
 Variables: ninguno de estos valores es sensible, el rol es inútil sin la
 condición de confianza OIDC, y así se leen en los logs.
 
@@ -44,12 +44,12 @@ condición de confianza OIDC, y así se leen en los logs.
 > environment— y el run muere con
 > `Input required and not supplied: aws-region`.
 
-| Variable | Valor |
-|---|---|
-| `AWS_REGION` | `us-east-1` |
+| Variable              | Valor                                                        |
+| --------------------- | ------------------------------------------------------------ |
+| `AWS_REGION`          | `us-east-1`                                                  |
 | `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::482545836518:role/plane-github-actions-deploy` |
-| `EC2_INSTANCE_ID` | `i-09ff0ee64a00c4195` |
-| `HEALTH_HOST` | `plane.camuflex.com` |
+| `EC2_INSTANCE_ID`     | `i-09ff0ee64a00c4195`                                        |
+| `HEALTH_HOST`         | `plane.camuflex.com`                                         |
 
 El host de ECR **no se configura**. Se deriva en cada job con
 `aws sts get-caller-identity` sobre la cuenta en la que el rol ya está
@@ -60,7 +60,7 @@ fallo: no puede traer un `https://`, una barra final ni un espacio invisible.
 Si quedó un secret `ECR_REGISTRY` de antes, ya no se lee y se puede borrar.
 
 El job `deploy` usa el environment `production`. Si no existe, GitHub lo crea
-al primer run; puedes añadirle *required reviewers* para exigir aprobación
+al primer run; puedes añadirle _required reviewers_ para exigir aprobación
 manual antes de cada despliegue.
 
 ## Confianza OIDC
@@ -127,7 +127,7 @@ o un snapshot EBS del volumen.
 
 ## Workflows heredados de upstream
 
-`build-branch.yml` (*Branch Build CE*) publicaba al Docker Hub de makeplane y
+`build-branch.yml` (_Branch Build CE_) publicaba al Docker Hub de makeplane y
 fallaba en cada push por falta de `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,
 además de duplicar el trabajo: construía las mismas 6 imágenes. Se eliminó
 del fork junto con `feature-deployment.yml` (necesita el Kubernetes y el

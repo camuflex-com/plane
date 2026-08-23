@@ -1,0 +1,108 @@
+# Orquestador de automatización
+
+Cierra el ciclo **Plane → Cursor → GitHub → Plane**: una persona mueve una issue a _In Progress_ y, si todo va bien, aparece un PR revisado y mergeado con la issue en _Done_.
+
+```
+Plane: issue entra a In Progress
+   │  webhook firmado → /webhooks/plane
+   ▼
+orchestrator ── POST /v1/agents (autoCreatePR) ──► Cursor Cloud Agent
+   ▲                                                     │
+   │  webhook: pull_request.opened  ◄─── PR en GitHub ◄──┘
+   │      → issue a In Review, comenta "bugbot run"
+   │
+   │  webhook: check_run.completed (Bugbot)
+   │      success → merge → issue a Done
+   │      con hallazgos → issue a In Progress + follow-up al agente
+   └───────────────────────────────────────────────────────┘
+```
+
+La API v1 de Cursor no emite webhooks, y no hace falta: cuando el agente termina abre un PR, y **GitHub sí avisa**. El sondeo queda solo como red de seguridad para agentes que mueran sin abrir PR ([reconciler.ts](src/reconciler.ts)).
+
+## Prevención de bucles
+
+El orquestador mueve issues, y eso vuelve por el webhook. Sin defensas se realimenta sin fin. Hay tres capas independientes:
+
+1. **Filtro por actor** ([server.ts](src/server.ts)) — se descarta todo evento cuyo `activity.actor.id` sea `PLANE_BOT_USER_ID`.
+2. **Deduplicación** — clave primaria sobre `(source, delivery_id)`; Plane y GitHub reintentan las entregas.
+3. **Guardas de estado** ([machine.ts](src/machine.ts)) — una run activa ignora nuevos eventos de arranque, y una run terminada no reacciona a nada.
+
+Las tres están cubiertas por tests. Si tocas [machine.ts](src/machine.ts), corre `pnpm test` antes de desplegar: es donde vive el riesgo real de este servicio.
+
+## Configuración
+
+Variables en `orchestrator.env` (validadas al arrancar, ver [env.ts](src/env.ts)):
+
+| Variable                | Para qué                                         |
+| ----------------------- | ------------------------------------------------ |
+| `DATABASE_URL`          | Base `orchestrator`, creada por `deploy.sh`      |
+| `PLANE_API_KEY`         | Mover issues y comentar                          |
+| `PLANE_WEBHOOK_SECRET`  | Verificar la firma de Plane                      |
+| `PLANE_BOT_USER_ID`     | **Crítico**: el usuario cuyos eventos se ignoran |
+| `CURSOR_API_KEY`        | Lanzar agentes                                   |
+| `GITHUB_TOKEN`          | Comentar, leer checks y mergear                  |
+| `GITHUB_WEBHOOK_SECRET` | Verificar la firma de GitHub                     |
+
+### Dos trampas que rompen el filtro anti-bucle
+
+**El `PLANE_API_KEY` tiene que salir de la cuenta del bot.** Plane atribuye
+cada acción al dueño del token ([`APIToken.user`](../api/plane/db/models/api.py)),
+y el filtro compara el actor del webhook contra `PLANE_BOT_USER_ID`. Con el
+token del admin, las acciones del orquestador se atribuirían al admin, el
+filtro no coincidiría nunca y el sistema entraría en bucle infinito.
+
+**`PLANE_BOT_USER_ID` es el id de usuario, no el de la membresía.** En la
+respuesta de `/workspace-members/` es `member.id`, no el `id` del objeto que
+lo envuelve. Un id equivocado falla en silencio: todo parece funcionar hasta
+que el primer movimiento del orquestador se realimenta.
+
+Para el bot actual (`bot@camuflex.com`) el valor es
+`eea8b7cb-5ecd-426c-a740-1a64bcfef307`.
+
+## Habilitar un proyecto
+
+Nada ocurre hasta que el proyecto está en `project_config`. Es el interruptor de seguridad.
+
+```sql
+INSERT INTO project_config
+  (plane_project_id, plane_workspace_slug, github_owner, github_repo, base_branch, enabled, max_attempts)
+VALUES
+  ('<uuid del proyecto>', 'camuflex', 'camuflex-com', '<repo>', 'main', TRUE, 3);
+```
+
+**El bot tiene que ser miembro del proyecto.** La API externa valida con
+`ProjectEntityPermission`, que exige una fila en `ProjectMember`: ser admin del
+workspace no basta. Sin eso, el orquestador recibe 403 al mover la issue.
+
+### El webhook de Plane
+
+En _Project Settings → Webhooks_ del proyecto:
+
+- **Payload URL**: `http://orchestrator.internal:3100/automation/webhooks/plane`
+- **Eventos**: solo **Work items**. El orquestador descarta cualquier otro
+  (`payload.event !== "issue"`), así que ciclos, módulos y comentarios solo
+  añadirían entregas inútiles.
+- **Fire on entering a state**: solo **In Progress**.
+
+El host lleva punto a propósito. Django valida la URL con `URLValidator`, que
+**rechaza los hostnames de una sola etiqueta**: con `orchestrator` a secas,
+Plane responde `{"url":["Enter a valid URL."]}`. El contenedor tiene el alias
+de red `orchestrator.internal` justamente para esto.
+
+Y como resuelve a una IP privada, hace falta además
+`WEBHOOK_ALLOWED_HOSTS=orchestrator.internal` en `plane.env` para que no lo
+bloquee la protección SSRF. Lo configura `deploy.sh`; el cambio exige reiniciar
+la API, porque el valor se lee al cargar los settings.
+
+El estado se verifica además en el servidor contra el payload, no solo por
+configuración: si alguien añadiera otro estado al disparador, el orquestador
+lo rechaza en vez de lanzar un agente sobre una issue que no toca.
+
+En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request` y `check_run`.
+
+## Límites conocidos
+
+- **El merge es automático.** Se exige Bugbot en verde y ningún otro check en rojo, y se manda el `sha` revisado para que GitHub rechace el merge si alguien empujó algo después. Aun así, Bugbot en verde no significa que el cambio sea correcto.
+- **`max_attempts` frena los rebotes.** Agotados los intentos la run se aparca y comenta en la issue. Sin ese tope, un bug que el agente no sepa arreglar daría vueltas quemando dinero.
+- **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual.
+- `project_config` se edita por SQL; no hay interfaz.

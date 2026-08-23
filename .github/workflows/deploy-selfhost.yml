@@ -117,6 +117,9 @@ jobs:
           - image: plane-proxy
             context: apps/proxy
             dockerfile: apps/proxy/Dockerfile.ce
+          - image: plane-orchestrator
+            context: .
+            dockerfile: apps/orchestrator/Dockerfile.orchestrator
     steps:
       - uses: actions/checkout@v5
 
