@@ -114,6 +114,20 @@ No hace falta **Checks**: el veredicto de Bugbot llega en el propio payload del
 webhook, y para el resto de la CI se usa `mergeable_state` del pull request,
 que cubre "Pull requests: read".
 
+### Autoría de los pull requests
+
+Los agentes se crean con `openAsCursorGithubApp: true` para que el PR lo abra
+la GitHub App de Cursor y no la cuenta humana conectada a la integración. Sin
+ese campo los PRs aparecen firmados por esa persona, como si los hubiera
+escrito.
+
+El campo no está en la documentación pública de Cursor, aunque aparece en la
+respuesta del agente y la API lo acepta al crear.
+
+El **merge** es otra cosa: lo hace el orquestador con `GITHUB_TOKEN`, así que
+el merge sí queda a nombre del dueño de ese token. Para que tampoco sea una
+persona haría falta una GitHub App propia en vez de un PAT.
+
 ## Límites conocidos
 
 - **El merge es automático.** Se exige Bugbot en verde y que el PR esté en

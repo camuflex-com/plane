@@ -97,7 +97,7 @@ export class Executor {
           name: `plane-${issue.name.slice(0, 60)}`,
         });
         await updateRun(this.db, run.id, { cursorAgentId: agent.id });
-        logger.info("agente lanzado", { runId: run.id, agentId: agent.id });
+        logger.info("agente lanzado", { runId: run.id, agentId: agent.id, cursorUrl: agent.url });
         return;
       }
 
