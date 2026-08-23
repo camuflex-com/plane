@@ -9,6 +9,8 @@ const run = (over: Partial<Run> = {}): Run => ({
   planeProjectId: "22222222-2222-2222-2222-222222222222",
   cursorAgentId: "agent_1",
   prNumber: 7,
+  headSha: "s",
+  lastBugbotReviewId: null,
   state: "agent_running",
   attempts: 0,
   ...over,
@@ -181,14 +183,15 @@ describe("veredicto de Bugbot", () => {
     expect(d.actions).toHaveLength(0);
   });
 
-  it("con hallazgos mientras corrige: vuelve a mandar el follow-up", () => {
+  it("con hallazgos mientras corrige: no quema otro intento", () => {
     const d = decide(
       run({ state: "fixing", attempts: 1 }),
       { type: "bugbot_verdict", prNumber: 7, conclusion: "neutral", findings: ["sigue el null"] },
       MAX
     );
-    expect(d.nextState).toBe("fixing");
-    expect(kinds(d)).toEqual(["move_issue", "comment_issue", "send_followup"]);
+    expect(d.nextState).toBeNull();
+    expect(d.actions).toHaveLength(0);
+    expect(d.ignoredBecause).toMatch(/corrigiendo/);
   });
 });
 

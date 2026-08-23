@@ -68,23 +68,6 @@ export class GitHubClient {
     );
   }
 
-  async listReviews(owner: string, repo: string, prNumber: number) {
-    return requestJson<
-      { id: number; user: { login: string }; body: string; state: string; submitted_at: string; commit_id: string }[]
-    >(this.repoUrl(owner, repo, `pulls/${prNumber}/reviews?per_page=100`), { headers: this.headers });
-  }
-
-  /**
-   * Checks del commit. Hace falta permiso Checks:read; si no está, GitHub
-   * responde 403 y el llamador se apoya en las reviews.
-   */
-  async listCheckRuns(owner: string, repo: string, ref: string) {
-    const data = await requestJson<{
-      check_runs: { name: string; status: string; conclusion: string | null; head_sha: string }[];
-    }>(this.repoUrl(owner, repo, `commits/${ref}/check-runs?per_page=100`), { headers: this.headers });
-    return data.check_runs ?? [];
-  }
-
   async mergePullRequest(owner: string, repo: string, prNumber: number, sha: string): Promise<void> {
     // Se manda `sha`: si alguien empujó al PR entre la revisión y el merge,
     // GitHub devuelve 409 y no se mergea código que Bugbot nunca vio.

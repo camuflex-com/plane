@@ -256,7 +256,26 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
   const repo = payload.repository?.name;
   if (!owner || !repo) return;
 
-  if (!isActionableGitHubEvent(eventName, payload)) return;
+  logger.info("webhook de GitHub", {
+    eventName,
+    action: payload.action,
+    owner,
+    repo,
+    deliveryId: deliveryId || undefined,
+  });
+
+  if (!isActionableGitHubEvent(eventName, payload)) {
+    if (eventName === "pull_request_review" || eventName === "check_run") {
+      logger.info("evento de GitHub ignorado", {
+        eventName,
+        action: payload.action,
+        login: payload.review?.user?.login,
+        checkName: payload.check_run?.name,
+        conclusion: payload.check_run?.conclusion,
+      });
+    }
+    return;
+  }
 
   if (deliveryId && !(await claimDelivery(db, "github", deliveryId))) {
     logger.debug("entrega de GitHub repetida, ignorada", { deliveryId });

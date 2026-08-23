@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS runs (
     cursor_agent_id   TEXT,
     pr_number         INTEGER,
     head_sha          TEXT,
+    last_bugbot_review_id BIGINT,
     state             TEXT NOT NULL,
     attempts          SMALLINT NOT NULL DEFAULT 0,
     last_error        TEXT,
@@ -66,4 +67,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS jobs_pending ON jobs (run_after) WHERE locked_at IS NULL;
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_bugbot_review_id BIGINT;
 `;

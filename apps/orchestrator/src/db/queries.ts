@@ -27,6 +27,10 @@ const toRun = (r: Record<string, unknown>): Run => ({
   planeProjectId: r.plane_project_id as string,
   cursorAgentId: (r.cursor_agent_id as string) ?? null,
   prNumber: r.pr_number === null ? null : Number(r.pr_number),
+  headSha: (r.head_sha as string) ?? null,
+  lastBugbotReviewId: r.last_bugbot_review_id === null || r.last_bugbot_review_id === undefined
+    ? null
+    : Number(r.last_bugbot_review_id),
   state: r.state as RunState,
   attempts: Number(r.attempts),
 });
@@ -106,14 +110,6 @@ export async function getRunForBugbot(
   return null;
 }
 
-export async function findRunsAwaitingBugbot(db: Db): Promise<Run[]> {
-  const res = await db.query(
-    `SELECT * FROM runs
-      WHERE pr_number IS NOT NULL AND state IN ('in_review', 'fixing', 'parked')`
-  );
-  return res.rows.map(toRun);
-}
-
 /**
  * Crea la run. El índice único parcial hace que dos eventos simultáneos de
  * "entra a In Progress" no puedan crear dos runs para la misma issue: el
@@ -136,6 +132,7 @@ export async function updateRun(
     cursorAgentId?: string;
     prNumber?: number;
     headSha?: string;
+    lastBugbotReviewId?: number;
     incrementAttempts?: boolean;
     lastError?: string;
   }
@@ -151,6 +148,7 @@ export async function updateRun(
   if (patch.cursorAgentId) add("cursor_agent_id", patch.cursorAgentId);
   if (patch.prNumber !== undefined) add("pr_number", patch.prNumber);
   if (patch.headSha) add("head_sha", patch.headSha);
+  if (patch.lastBugbotReviewId !== undefined) add("last_bugbot_review_id", patch.lastBugbotReviewId);
   if (patch.lastError !== undefined) add("last_error", patch.lastError);
   if (patch.incrementAttempts) sets.push("attempts = attempts + 1");
 

@@ -3,6 +3,7 @@
 // en orden. Paralelizarlas rompería justamente lo que se busca.
 import { CursorClient } from "@/clients/cursor";
 import { GitHubClient, type PullRequest } from "@/clients/github";
+import { HttpError } from "@/clients/http";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
 import {
@@ -68,7 +69,10 @@ export class Executor {
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
       case "reconcile.bugbot":
-        return this.onReconcileBugbot(job.payload as { runId: number });
+        // Jobs encolados por el sondeo viejo: ya no se aplican. El veredicto
+        // llega por webhook; rehacerlo desde GitHub reaplicaba reviews viejas.
+        logger.info("reconcile de Bugbot desactivado, se espera el webhook", { runId: (job.payload as { runId?: number }).runId });
+        return;
       default:
         logger.warn("tipo de trabajo desconocido", { kind: job.kind });
     }
@@ -136,7 +140,7 @@ export class Executor {
         return;
 
       case "send_followup":
-        await this.cursor.sendFollowUp(action.agentId, buildFixPrompt(action.findings));
+        await this.sendFollowUp(action.agentId, action.findings);
         return;
 
       case "merge_pr": {
@@ -220,6 +224,8 @@ export class Executor {
       planeProjectId: row.plane_project_id,
       cursorAgentId: row.cursor_agent_id ?? null,
       prNumber: null,
+      headSha: payload.headSha,
+      lastBugbotReviewId: null,
       state: "agent_running",
       attempts: Number(row.attempts),
     };
@@ -274,6 +280,23 @@ export class Executor {
       return;
     }
 
+    if (payload.reviewId > 0 && run.lastBugbotReviewId === payload.reviewId) {
+      logger.info("revisión de Bugbot ya aplicada", { prNumber: payload.prNumber, reviewId: payload.reviewId });
+      return;
+    }
+
+    // Review de un commit que ya no es HEAD: el agente empujó y esta opinión
+    // es de la versión anterior. Aplicarla reabriría un ciclo ya cerrado.
+    if (payload.headSha && run.headSha && payload.headSha !== run.headSha) {
+      logger.info("revisión de Bugbot de un commit anterior, se ignora", {
+        prNumber: payload.prNumber,
+        reviewId: payload.reviewId,
+        reviewSha: payload.headSha,
+        runSha: run.headSha,
+      });
+      return;
+    }
+
     if (payload.headSha) {
       await updateRun(this.db, run.id, { headSha: payload.headSha });
     }
@@ -308,6 +331,10 @@ export class Executor {
       conclusion: interpreted.kind === "success" ? "success" : "neutral",
       findings: interpreted.findings,
     });
+
+    if (payload.reviewId > 0) {
+      await updateRun(this.db, run.id, { lastBugbotReviewId: payload.reviewId });
+    }
   }
 
   /** Check de Bugbot en verde: no hay review de GitHub, pero sí "no encontró bugs". */
@@ -329,6 +356,15 @@ export class Executor {
       return;
     }
 
+    if (payload.headSha && run.headSha && payload.headSha !== run.headSha) {
+      logger.info("check de Bugbot de un commit anterior, se ignora", {
+        prNumber: run.prNumber,
+        checkSha: payload.headSha,
+        runSha: run.headSha,
+      });
+      return;
+    }
+
     if (payload.headSha) {
       await updateRun(this.db, run.id, { headSha: payload.headSha });
     }
@@ -343,63 +379,19 @@ export class Executor {
   }
 
   /**
-   * Recupera un veredicto que el webhook se saltó (reinicio, evento anterior
-   * al deploy). Mira el check en verde y, si no hay permiso Checks, las reviews.
+   * Un 409 `agent_busy` no es un fallo del ciclo: el agente ya está
+   * trabajando (el follow-up anterior o el push en curso). Reintentar el job
+   * volvería a incrementar intentos.
    */
-  private async onReconcileBugbot(payload: { runId: number }): Promise<void> {
-    const res = await this.db.query(`SELECT * FROM runs WHERE id = $1`, [payload.runId]);
-    const row = res.rows[0];
-    if (!row || row.pr_number === null) return;
-    const config = await getEnabledProject(this.db, row.plane_project_id);
-    if (!config) return;
-
-    const prNumber = Number(row.pr_number);
-    const { githubOwner: owner, githubRepo: repo } = config;
-
+  private async sendFollowUp(agentId: string, findings: string[]): Promise<void> {
     try {
-      const pr = await this.github.getPullRequest(owner, repo, prNumber);
-      if (pr.merged) {
-        await this.apply(runFromRow(row), config, {
-          type: "bugbot_verdict",
-          prNumber,
-          conclusion: "success",
-          findings: [],
-        });
+      await this.cursor.sendFollowUp(agentId, buildFixPrompt(findings));
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 409) {
+        logger.info("agente ocupado, se espera el push", { agentId });
         return;
       }
-
-      try {
-        const checks = await this.github.listCheckRuns(owner, repo, pr.head.sha);
-        const bugbotGreen = checks.some(
-          (c) => isBugbotCheck(c.name) && c.status === "completed" && c.conclusion === "success"
-        );
-        if (bugbotGreen) {
-          logger.info("reconcile: Bugbot en verde", { runId: payload.runId, prNumber });
-          await this.onBugbotCheckSuccess({ owner, repo, prNumber, headSha: pr.head.sha });
-          return;
-        }
-      } catch (error) {
-        logger.info("reconcile: no se pudieron leer checks, se miran reviews", {
-          prNumber,
-          error: String(error),
-        });
-      }
-
-      const reviews = await this.github.listReviews(owner, repo, prNumber);
-      const latest = reviews.findLast((r) => isBugbot(r.user?.login));
-      if (!latest) return;
-
-      await this.onBugbotReview({
-        owner,
-        repo,
-        prNumber,
-        headSha: latest.commit_id ?? pr.head.sha,
-        reviewId: latest.id,
-        state: latest.state,
-        body: latest.body ?? "",
-      });
-    } catch (error) {
-      logger.warn("reconcile de Bugbot falló", { runId: payload.runId, error: String(error) });
+      throw error;
     }
   }
 
@@ -438,6 +430,11 @@ function runFromRow(row: Record<string, unknown>): Run {
     planeProjectId: row.plane_project_id as string,
     cursorAgentId: (row.cursor_agent_id as string) ?? null,
     prNumber: row.pr_number === null ? null : Number(row.pr_number),
+    headSha: (row.head_sha as string) ?? null,
+    lastBugbotReviewId:
+      row.last_bugbot_review_id === null || row.last_bugbot_review_id === undefined
+        ? null
+        : Number(row.last_bugbot_review_id),
     state: row.state as Run["state"],
     attempts: Number(row.attempts),
   };

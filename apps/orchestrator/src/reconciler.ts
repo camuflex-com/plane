@@ -1,19 +1,20 @@
 // oxlint-disable no-await-in-loop -- la secuencialidad es intencionada:
 // reintentos con backoff, sondeo de la cola y acciones que deben aplicarse
 // en orden. Paralelizarlas rompería justamente lo que se busca.
+import { sleep } from "@/clients/http";
 import type { Db } from "@/db";
-import { findRunsAwaitingBugbot, findStaleRuns } from "@/db/queries";
+import { findStaleRuns } from "@/db/queries";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
-import { sleep } from "@/clients/http";
 
 /**
  * Red de seguridad para lo que los webhooks no cubren.
  *
- * - Agente que muere sin abrir PR (la v1 de Cursor no emite webhooks).
- * - Veredicto de Bugbot perdido por un reinicio: el check ya está en verde y
- *   GitHub no reenvía el webhook.
+ * Solo agentes que mueren sin abrir PR: la v1 de Cursor no emite webhooks.
+ * El veredicto de Bugbot NO se sondea. GitHub ya lo manda por
+ * `pull_request_review` y `check_run`; volver a leer el PR reaplicaba reviews
+ * viejas, quemaba intentos y cortaba ciclos que seguían vivos.
  */
 export async function runReconciler(db: Db, env: Env, signal: AbortSignal): Promise<void> {
   while (!signal.aborted) {
@@ -32,11 +33,5 @@ async function reconcileOnce(db: Db, env: Env): Promise<void> {
   for (const run of stale) {
     logger.warn("run sin PR, se marca para aparcar", { runId: run.id });
     await enqueue(db, "reconcile.stale", { runId: run.id, minutes: env.AGENT_STALE_MINUTES });
-  }
-
-  const waiting = await findRunsAwaitingBugbot(db);
-  for (const run of waiting) {
-    logger.info("run esperando a Bugbot, se reconcilia", { runId: run.id, prNumber: run.prNumber });
-    await enqueue(db, "reconcile.bugbot", { runId: run.id });
   }
 }

@@ -41,7 +41,7 @@ Variables en `orchestrator.env` (validadas al arrancar, ver [env.ts](src/env.ts)
 | `PLANE_WEBHOOK_SECRET`  | Verificar la firma de Plane                      |
 | `PLANE_BOT_USER_ID`     | **Crítico**: el usuario cuyos eventos se ignoran |
 | `CURSOR_API_KEY`        | Lanzar agentes                                   |
-| `GITHUB_TOKEN`          | Comentar, leer checks y mergear                  |
+| `GITHUB_TOKEN`          | Comentar, mergear y leer reviews                 |
 | `GITHUB_WEBHOOK_SECRET` | Verificar la firma de GitHub                     |
 
 ### Dos trampas que rompen el filtro anti-bucle
@@ -99,7 +99,7 @@ El estado se verifica además en el servidor contra el payload, no solo por
 configuración: si alguien añadiera otro estado al disparador, el orquestador
 lo rechaza en vez de lanzar un agente sobre una issue que no toca.
 
-En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`.
+En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`. Sin los dos últimos el ciclo se queda en _In Review_ para siempre: **no hay sondeo** que recupere el veredicto.
 
 ### Issues desde camuflex-backend
 
@@ -155,8 +155,10 @@ Bugbot hace dos cosas distintas, y no al mismo tiempo:
   `neutral` en el check). El `neutral` se ignora. El
   `pull_request_review.submitted` es el que manda a In Progress con las notas.
 
-Si el proceso se reinicia y el webhook ya pasó, el reconciler mira el PR al
-arrancar: check en verde → merge; review con hallazgos → corrección.
+Si el proceso se reinicia y un webhook ya pasó, ese evento se pierde. No se
+vuelve a preguntar a GitHub: el sondeo reaplicaba reviews viejas y aparcaba
+runs que seguían vivas. GitHub reintenta entregas fallidas (`X-GitHub-Delivery`);
+hace falta que el webhook incluya `pull_request_review` y `check_run`.
 
 Los hallazgos se leen de **esa** revisión, no de todo el PR, para no reutilizar
 comentarios de un intento anterior.

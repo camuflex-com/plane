@@ -19,6 +19,8 @@ export type Run = {
   planeProjectId: string;
   cursorAgentId: string | null;
   prNumber: number | null;
+  headSha: string | null;
+  lastBugbotReviewId: number | null;
   state: RunState;
   attempts: number;
 };
@@ -136,10 +138,13 @@ export function decide(run: Run | null, event: Event, maxAttempts: number): Deci
 
     case "bugbot_verdict": {
       if (!run) return NOTHING("veredicto sin run asociada");
-      // `fixing` también: el agente ya empujó la corrección y Bugbot volvió a
-      // opinar antes de que procesáramos el synchronize, o un success llegó
-      // tarde después de un veredicto incompleto. Descartarlo deja la run
-      // colgada y el PR sin mergear.
+      // `success` también en `fixing` y `parked`: el verde puede llegar antes
+      // que el synchronize, o tarde tras un park prematuro.
+      // `findings` en `fixing` no: el agente ya está corrigiendo, y reaplicar
+      // la review anterior quemaría intentos y chocaría con `agent_busy`.
+      if (event.conclusion !== "success" && run.state === "fixing") {
+        return NOTHING("ya se está corrigiendo; se espera el push");
+      }
       if (run.state !== "in_review" && run.state !== "fixing" && run.state !== "parked") {
         return NOTHING(`veredicto recibido en estado ${run.state}`);
       }
