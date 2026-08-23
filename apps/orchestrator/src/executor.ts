@@ -20,6 +20,10 @@ import { logger } from "@/logger";
 import { decide, type Action, type Event, type Run } from "@/machine";
 import { enqueue, type Job } from "@/queue";
 
+/** Cuánto esperar a que Bugbot publique su revisión, y cuántas veces. */
+const VERDICT_DEFER_MS = 30_000;
+const MAX_VERDICT_DEFERRALS = 12;
+
 export class Executor {
   readonly plane: PlaneClient;
   readonly cursor: CursorClient;
@@ -199,7 +203,9 @@ export class Executor {
     prNumber: number | null;
     headSha: string | null;
     conclusion: string;
+    deferAttempt?: number;
   }): Promise<void> {
+    const deferAttempt = payload.deferAttempt ?? 0;
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
 
@@ -214,7 +220,32 @@ export class Executor {
       return;
     }
 
-    const findings = payload.conclusion === "success" ? [] : await this.collectFindings(config, run.prNumber);
+    // Con veredicto limpio no hace falta esperar a nada: no hay detalle que
+    // recoger.
+    if (payload.conclusion === "success") {
+      await this.apply(run, config, {
+        type: "bugbot_verdict",
+        prNumber: run.prNumber,
+        conclusion: "success",
+        findings: [],
+      });
+      return;
+    }
+
+    // Con hallazgos sí: el check de Bugbot puede completar MINUTOS antes de
+    // que publique su revisión. Actuar con el primero produce un "sin detalle"
+    // inútil y, peor, deja la run fuera de `in_review`, de modo que el
+    // veredicto de verdad llega tarde y se descarta.
+    const findings = await this.collectFindings(config, run.prNumber);
+    if (findings.length === 0) {
+      const attempt = Number(deferAttempt) + 1;
+      if (attempt <= MAX_VERDICT_DEFERRALS) {
+        logger.info("veredicto sin revisión todavía, se pospone", { prNumber: run.prNumber, attempt });
+        await enqueue(this.db, "github.check_completed", { ...payload, deferAttempt: attempt }, VERDICT_DEFER_MS);
+        return;
+      }
+      logger.warn("se agotó la espera de la revisión; se sigue sin detalle", { prNumber: run.prNumber });
+    }
 
     await this.apply(run, config, {
       type: "bugbot_verdict",
@@ -224,13 +255,23 @@ export class Executor {
     });
   }
 
-  /** Los hallazgos salen de los comentarios en línea que deja Bugbot en el PR. */
+  /**
+   * Detalle de los hallazgos: los comentarios en línea de Bugbot y, si no hay,
+   * el resumen de su review.
+   */
   private async collectFindings(config: ProjectConfig, prNumber: number): Promise<string[]> {
+    const { githubOwner: owner, githubRepo: repo } = config;
     try {
-      const comments = await this.github.listReviewComments(config.githubOwner, config.githubRepo, prNumber);
-      return comments
-        .filter((c) => /bugbot|cursor/i.test(c.user?.login ?? ""))
-        .map((c) => `${c.path}${c.line ? `:${c.line}` : ""} — ${c.body.split("\n")[0]?.slice(0, 300) ?? ""}`);
+      const comments = await this.github.listReviewComments(owner, repo, prNumber);
+      const inline = comments
+        .filter((c) => isBugbot(c.user?.login))
+        .map((c) => `${c.path}${c.line ? `:${c.line}` : ""} — ${cleanFinding(c.body)}`);
+      if (inline.length > 0) return inline;
+
+      // Sin comentarios en línea, el resumen de la review sirve de detalle.
+      const reviews = await this.github.listReviews(owner, repo, prNumber);
+      const summary = reviews.findLast((r) => isBugbot(r.user?.login) && r.body?.trim());
+      return summary ? [cleanFinding(summary.body)] : [];
     } catch (error) {
       // Quedarse sin el detalle no debe bloquear el ciclo: se devuelve la
       // issue igualmente y el agente puede releer el PR.
@@ -280,6 +321,19 @@ export function assertMergeable(pr: PullRequest): void {
         `(solo "clean" garantiza sin conflictos y con los checks requeridos en verde)`
     );
   }
+}
+
+/** Bugbot publica como `cursor[bot]`. */
+export const isBugbot = (login: string | undefined) => /bugbot|cursor/i.test(login ?? "");
+
+/** Quita el marcado de Bugbot y deja una línea legible. */
+export function cleanFinding(body: string): string {
+  const firstLine =
+    body
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith("<!--")) ?? "";
+  return firstLine.replace(/^#+\s*/, "").slice(0, 300);
 }
 
 function buildPrompt(title: string, description: string | null, baseBranch: string): string {

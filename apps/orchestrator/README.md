@@ -128,6 +128,19 @@ El **merge** es otra cosa: lo hace el orquestador con `GITHUB_TOKEN`, así que
 el merge sí queda a nombre del dueño de ese token. Para que tampoco sea una
 persona haría falta una GitHub App propia en vez de un PAT.
 
+### El check de Bugbot llega antes que la revisión
+
+Observado en producción: el `check_run` de Bugbot completó a las 19:01 y su
+revisión no apareció hasta las 19:07 —seis minutos después—. Actuar con el
+primero producía un comentario "(sin detalle)" y, peor, sacaba la run de
+`in_review`, de modo que el veredicto real llegaba tarde y se descartaba por
+las guardas de estado.
+
+Por eso, cuando el veredicto trae hallazgos, el orquestador **no actúa hasta
+tener el detalle**: reencola el trabajo cada 30 s (hasta 12 veces, 6 minutos)
+mientras la revisión no exista. Con veredicto limpio no espera, porque no hay
+nada que recoger.
+
 ## Límites conocidos
 
 - **El merge es automático.** Se exige Bugbot en verde y que el PR esté en
