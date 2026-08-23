@@ -1,8 +1,15 @@
 import type { Env } from "@/env";
-import { requestJson } from "./http";
+import { HttpError, requestJson } from "./http";
 
 type State = { id: string; name: string; group: string };
-type Issue = { id: string; name: string; description_stripped: string | null; state: string; sequence_id?: number };
+type IssueState = string | { id?: string; name?: string; group?: string };
+export type Issue = {
+  id: string;
+  name: string;
+  description_stripped: string | null;
+  state: IssueState;
+  sequence_id?: number;
+};
 
 export type CreateIssueInput = {
   name: string;
@@ -37,6 +44,32 @@ export class PlaneClient {
     return requestJson<Issue>(this.url(slug, `projects/${projectId}/work-items/${issueId}/`), {
       headers: this.headers,
     });
+  }
+
+  /**
+   * Busca por (external_id, external_source). Es la guarda anti-duplicados
+   * del ingest: el mismo recurso no debe abrir otra issue.
+   */
+  async findIssueByExternal(
+    slug: string,
+    projectId: string,
+    externalId: string,
+    externalSource: string
+  ): Promise<Issue | null> {
+    const query = new URLSearchParams({
+      external_id: externalId,
+      external_source: externalSource,
+      expand: "state",
+    });
+    try {
+      return await requestJson<Issue>(this.url(slug, `projects/${projectId}/work-items/?${query.toString()}`), {
+        headers: this.headers,
+        retries: 0,
+      });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   /**
@@ -100,6 +133,14 @@ export class PlaneClient {
       body: JSON.stringify(body),
     });
   }
+}
+
+/** Estados terminales de Plane: reabrir esos sí; el resto ya está en curso. */
+export function issueIsClosed(issue: Issue): boolean {
+  const group = typeof issue.state === "object" ? (issue.state.group ?? "") : "";
+  const name = typeof issue.state === "object" ? (issue.state.name ?? "") : "";
+  const label = `${group} ${name}`.toLowerCase();
+  return /completed|cancelled|canceled|done/.test(label);
 }
 
 /** Conversión mínima: Plane espera HTML y solo generamos párrafos y listas. */

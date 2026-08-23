@@ -103,18 +103,18 @@ En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` 
 
 ### Issues desde camuflex-backend
 
-`POST https://plane.camuflex.com/automation/issues` crea una issue a nombre del bot. Auth: cabecera `X-API-Key` con el mismo `PLANE_API_KEY`. El backend la lee de SSM (`/camuflex/prod/plane/api-key`).
+`POST https://plane.camuflex.com/automation/issues` crea una issue a nombre del bot, **en In Progress**, para que el ciclo arranque al momento. Auth: cabecera `X-API-Key` con el mismo `PLANE_API_KEY`. El backend la lee de SSM (`/camuflex/prod/plane/api-key`).
 
 ```json
 {
   "name": "Título",
   "description": "Markdown opcional",
-  "priority": "high",
-  "state": "In Progress"
+  "resource": "lambda:app-health",
+  "priority": "high"
 }
 ```
 
-Sin `projectId` se usa el proyecto de `camuflex-com/camuflex-backend` en `project_config`. `state` es el nombre del estado en Plane; si se omite, queda el default del proyecto. `externalId` evita duplicados si el backend reintenta.
+`resource` (o `externalId`) es la guarda: varios errores del mismo sitio reutilizan la issue abierta (HTTP 200). Si ya estaba en Done, se reabre a In Progress. Sin `resource` se usa el título. Sin `projectId` se usa el proyecto de `camuflex-com/camuflex-backend` en `project_config`.
 
 ### Permisos del `GITHUB_TOKEN`
 

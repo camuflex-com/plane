@@ -135,8 +135,19 @@ async function ingestExternalIssue(db: Db, env: Env, req: Request, res: Response
 
   try {
     const issue = await createIngestedIssue(new PlaneClient(env), config, parsed.payload);
-    logger.info("issue creada desde el backend", { issueId: issue.id, projectId: issue.projectId });
-    res.status(201).json(issue);
+    // El bot crea/reabre la issue: el webhook de Plane llega con actor = bot
+    // y el filtro anti-bucle lo descarta. Encolamos aquí para que el ciclo
+    // arranque. Si la issue ya estaba abierta, no: esa es la guarda.
+    if (issue.created || issue.reopened) {
+      await enqueue(db, "plane.issue_in_progress", { issueId: issue.id, projectId: issue.projectId });
+    }
+    logger.info(issue.created ? "issue creada desde el backend" : "issue reutilizada, mismo recurso", {
+      issueId: issue.id,
+      projectId: issue.projectId,
+      created: issue.created,
+      reopened: issue.reopened,
+    });
+    res.status(issue.created ? 201 : 200).json(issue);
   } catch (error: unknown) {
     if (error instanceof HttpError && error.status === 409) {
       res.status(409).json({ error: "issue duplicada" });

@@ -1,7 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseIssuePayload, resolveIngestProject, createIngestedIssue } from "@/ingest-issue";
+import { parseIssuePayload, resolveIngestProject, createIngestedIssue, dedupeKey } from "@/ingest-issue";
+import { issueIsClosed } from "@/clients/plane";
 import type { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
+
+const config = {
+  planeProjectId: "proj",
+  planeWorkspaceSlug: "camuflex",
+  githubOwner: "camuflex-com",
+  githubRepo: "camuflex-backend",
+  baseBranch: "main",
+  enabled: true,
+  maxAttempts: 3,
+};
+
+const payload = {
+  name: "Alerta",
+  description: "algo se rompió",
+  owner: "camuflex-com",
+  repo: "camuflex-backend",
+  resource: "lambda:app-health",
+  priority: "high",
+  externalSource: "camuflex-backend",
+};
 
 describe("parseIssuePayload", () => {
   it("exige un name o title", () => {
@@ -17,35 +38,28 @@ describe("parseIssuePayload", () => {
 
   it("toma title como alias de name y defaulta al repo del backend", () => {
     const parsed = parseIssuePayload(JSON.stringify({ title: "Fallo en /health" }));
-    expect(parsed).toEqual({
-      ok: true,
-      payload: {
-        name: "Fallo en /health",
-        description: "",
-        projectId: undefined,
-        owner: "camuflex-com",
-        repo: "camuflex-backend",
-        priority: undefined,
-        state: undefined,
-        externalId: undefined,
-        externalSource: undefined,
-      },
-    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.payload.name).toBe("Fallo en /health");
+    expect(parsed.payload.owner).toBe("camuflex-com");
+    expect(parsed.payload.repo).toBe("camuflex-backend");
+    expect(parsed.payload.externalSource).toBe("camuflex-backend");
   });
 
-  it("acepta projectId y description", () => {
+  it("acepta projectId, resource y description", () => {
     const parsed = parseIssuePayload(
       JSON.stringify({
         name: "Alerta",
         description: "detalle",
         projectId: "11111111-1111-1111-1111-111111111111",
+        resource: "POST /health",
         priority: "high",
       })
     );
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.payload.description).toBe("detalle");
-      expect(parsed.payload.projectId).toBe("11111111-1111-1111-1111-111111111111");
+      expect(parsed.payload.resource).toBe("POST /health");
       expect(parsed.payload.priority).toBe("high");
     }
   });
@@ -53,6 +67,41 @@ describe("parseIssuePayload", () => {
   it("rechaza una priority desconocida", () => {
     const parsed = parseIssuePayload(JSON.stringify({ name: "x", priority: "critical" }));
     expect(parsed.ok).toBe(false);
+  });
+});
+
+describe("dedupeKey", () => {
+  it("usa resource por encima del título", () => {
+    expect(dedupeKey({ name: "Error A", resource: "lambda:app-health" })).toBe("lambda:app-health");
+    expect(dedupeKey({ name: "Error B", resource: "lambda:app-health" })).toBe("lambda:app-health");
+  });
+
+  it("normaliza espacios y mayúsculas", () => {
+    expect(dedupeKey({ name: "Fallo en /Health" })).toBe("fallo-en-/health");
+  });
+
+  it("prefiere externalId si viene", () => {
+    expect(dedupeKey({ name: "x", resource: "r", externalId: "id-1" })).toBe("id-1");
+  });
+});
+
+describe("issueIsClosed", () => {
+  it("trata Done/cancelled como cerrada", () => {
+    expect(issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "Done", group: "completed" } })).toBe(
+      true
+    );
+    expect(issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "Cancelled", group: "cancelled" } })).toBe(
+      true
+    );
+  });
+
+  it("deja abierta In Progress e In Review", () => {
+    expect(
+      issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "In Progress", group: "started" } })
+    ).toBe(false);
+    expect(
+      issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "In Review", group: "started" } })
+    ).toBe(false);
   });
 });
 
@@ -75,43 +124,68 @@ describe("resolveIngestProject", () => {
     const parsed = parseIssuePayload(JSON.stringify({ name: "x" }));
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    const config = await resolveIngestProject(db, parsed.payload);
+    const resolved = await resolveIngestProject(db, parsed.payload);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("github_owner"), ["camuflex-com", "camuflex-backend"]);
-    expect(config?.planeProjectId).toBe("proj");
+    expect(resolved?.planeProjectId).toBe("proj");
   });
 });
 
 describe("createIngestedIssue", () => {
-  it("crea la issue a través del cliente de Plane", async () => {
+  it("crea en In Progress con la clave del recurso", async () => {
     const createIssue = vi.fn().mockResolvedValue({ id: "issue-1", name: "Alerta", sequence_id: 12 });
-    const plane = { createIssue } as unknown as PlaneClient;
-    const result = await createIngestedIssue(
-      plane,
-      {
-        planeProjectId: "proj",
-        planeWorkspaceSlug: "camuflex",
-        githubOwner: "camuflex-com",
-        githubRepo: "camuflex-backend",
-        baseBranch: "main",
-        enabled: true,
-        maxAttempts: 3,
-      },
-      {
-        name: "Alerta",
-        description: "algo se rompió",
-        owner: "camuflex-com",
-        repo: "camuflex-backend",
-        priority: "high",
-      }
-    );
+    const findIssueByExternal = vi.fn().mockResolvedValue(null);
+    const plane = { createIssue, findIssueByExternal } as unknown as PlaneClient;
+    const result = await createIngestedIssue(plane, config, payload);
     expect(createIssue).toHaveBeenCalledWith("camuflex", "proj", {
       name: "Alerta",
       description: "algo se rompió",
       priority: "high",
-      stateName: undefined,
-      externalId: undefined,
-      externalSource: undefined,
+      stateName: "In Progress",
+      externalId: "lambda:app-health",
+      externalSource: "camuflex-backend",
     });
-    expect(result).toEqual({ id: "issue-1", name: "Alerta", sequenceId: 12, projectId: "proj" });
+    expect(result).toEqual({
+      id: "issue-1",
+      name: "Alerta",
+      sequenceId: 12,
+      projectId: "proj",
+      created: true,
+      reopened: false,
+    });
+  });
+
+  it("reutiliza la issue abierta del mismo recurso y no crea otra", async () => {
+    const createIssue = vi.fn();
+    const moveIssue = vi.fn();
+    const findIssueByExternal = vi.fn().mockResolvedValue({
+      id: "issue-1",
+      name: "Alerta",
+      sequence_id: 12,
+      state: { name: "In Progress", group: "started" },
+    });
+    const plane = { createIssue, moveIssue, findIssueByExternal } as unknown as PlaneClient;
+    const result = await createIngestedIssue(plane, config, payload);
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(moveIssue).not.toHaveBeenCalled();
+    expect(result.created).toBe(false);
+    expect(result.reopened).toBe(false);
+    expect(result.id).toBe("issue-1");
+  });
+
+  it("reabre una issue Done del mismo recurso a In Progress", async () => {
+    const createIssue = vi.fn();
+    const moveIssue = vi.fn().mockResolvedValue(undefined);
+    const findIssueByExternal = vi.fn().mockResolvedValue({
+      id: "issue-1",
+      name: "Alerta",
+      sequence_id: 12,
+      state: { name: "Done", group: "completed" },
+    });
+    const plane = { createIssue, moveIssue, findIssueByExternal } as unknown as PlaneClient;
+    const result = await createIngestedIssue(plane, config, payload);
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(moveIssue).toHaveBeenCalledWith("camuflex", "proj", "issue-1", "in_progress");
+    expect(result.created).toBe(false);
+    expect(result.reopened).toBe(true);
   });
 });
