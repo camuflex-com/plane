@@ -85,6 +85,7 @@ function ProjectWebhooksListPage() {
           isOpen={showCreateWebhookModal}
           onClose={() => setShowCreateWebhookModal(false)}
           showProjectScope={false}
+          stateTriggerProjectId={projectId?.toString()}
         />
         <SettingsHeading
           title={t("workspace_settings.settings.webhooks.title")}

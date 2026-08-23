@@ -60,6 +60,9 @@ function ProjectWebhookDetailsPage() {
       module: formData.module,
       issue: formData.issue,
       issue_comment: formData.issue_comment,
+      // Siempre se envia: vaciar la seleccion tiene que poder devolver el
+      // webhook a emitir por cualquier evento.
+      state_ids: formData.state_ids ?? [],
     };
 
     try {
@@ -102,7 +105,12 @@ function ProjectWebhookDetailsPage() {
       <DeleteProjectWebhookModal isOpen={deleteWebhookModal} onClose={() => setDeleteWebhookModal(false)} />
       <div className="w-full space-y-8 overflow-y-auto">
         <div>
-          <WebhookForm onSubmit={handleUpdateWebhook} data={currentWebhook} showProjectScope={false} />
+          <WebhookForm
+            onSubmit={handleUpdateWebhook}
+            data={currentWebhook}
+            showProjectScope={false}
+            stateTriggerProjectId={projectId?.toString()}
+          />
         </div>
         <WebhookDeleteSection openDeleteModal={() => setDeleteWebhookModal(true)} />
       </div>

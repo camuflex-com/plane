@@ -36,10 +36,20 @@ interface ICreateWebhookModal {
   onClose: () => void;
   /** Off inside a project's settings: the scope is the project itself. */
   showProjectScope?: boolean;
+  /** Enables the state-transition picker for that project's states. */
+  stateTriggerProjectId?: string;
 }
 
 export function CreateWebhookModal(props: ICreateWebhookModal) {
-  const { isOpen, onClose, currentWorkspace, createWebhook, clearSecretKey, showProjectScope = true } = props;
+  const {
+    isOpen,
+    onClose,
+    currentWorkspace,
+    createWebhook,
+    clearSecretKey,
+    showProjectScope = true,
+    stateTriggerProjectId,
+  } = props;
   // states
   const [generatedWebhook, setGeneratedKey] = useState<IWebhook | null>(null);
   // router
@@ -53,6 +63,8 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
       url: formData.url,
       // Empty array = workspace-wide, which is the API's default too.
       project_ids: formData.project_ids ?? [],
+      // Empty array = fire on every event, no transition filter.
+      state_ids: formData.state_ids ?? [],
     };
 
     if (webhookEventType === "all")
@@ -111,7 +123,12 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
   return (
     <ModalCore isOpen={isOpen} position={EModalPosition.TOP} width={EModalWidth.XXL} className="p-4 pb-0">
       {!generatedWebhook ? (
-        <WebhookForm onSubmit={handleCreateWebhook} handleClose={handleClose} showProjectScope={showProjectScope} />
+        <WebhookForm
+          onSubmit={handleCreateWebhook}
+          handleClose={handleClose}
+          showProjectScope={showProjectScope}
+          stateTriggerProjectId={stateTriggerProjectId}
+        />
       ) : (
         <GeneratedHookDetails webhookDetails={generatedWebhook} handleClose={handleClose} />
       )}

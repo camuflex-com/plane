@@ -5,6 +5,7 @@
 # Python imports
 import logging
 from urllib.parse import urlparse
+from uuid import UUID
 
 # Third party imports
 from rest_framework import serializers
@@ -14,7 +15,7 @@ from django.conf import settings
 
 # Module imports
 from .base import DynamicBaseSerializer
-from plane.db.models import Project, ProjectWebhook, Webhook, WebhookLog
+from plane.db.models import Project, ProjectWebhook, State, Webhook, WebhookLog, WebhookState
 from plane.db.models.webhook import validate_domain, validate_schema
 from plane.utils.ip_address import validate_url
 
@@ -35,8 +36,80 @@ class WebhookSerializer(DynamicBaseSerializer):
     )
     projects = serializers.SerializerMethodField(read_only=True)
 
+    # Vacío (u omitido) = sin filtro por transición: el webhook emite por
+    # cualquier evento, que es como se comportaba antes de existir esto.
+    state_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+    states = serializers.SerializerMethodField(read_only=True)
+
     def get_projects(self, obj):
         return [str(pk) for pk in obj.project_webhooks.values_list("project_id", flat=True)]
+
+    def get_states(self, obj):
+        return [str(pk) for pk in obj.webhook_states.values_list("state_id", flat=True)]
+
+    def validate_state_ids(self, value):
+        """Los estados tienen que existir dentro del workspace del webhook."""
+        if not value:
+            return value
+
+        workspace_id = self.context.get("workspace_id") or getattr(self.instance, "workspace_id", None)
+        if workspace_id is None:
+            return value
+
+        unique_ids = list(dict.fromkeys(value))
+        queryset = State.all_state_objects.filter(workspace_id=workspace_id, pk__in=unique_ids)
+
+        # Desde los endpoints de un proyecto, el alcance se estrecha a ese
+        # proyecto: si no, un admin de proyecto podría disparar su webhook con
+        # los estados de un proyecto que no administra.
+        scoped_project_id = self.context.get("project_id")
+        if scoped_project_id is not None:
+            queryset = queryset.filter(project_id=scoped_project_id)
+
+        found = set(queryset.values_list("pk", flat=True))
+        missing = [str(pk) for pk in unique_ids if pk not in found]
+        if missing:
+            scope = "this project" if scoped_project_id is not None else "this workspace"
+            raise serializers.ValidationError(f"States not found in {scope}: {', '.join(missing)}")
+        return unique_ids
+
+    def _sync_state_triggers(self, webhook, state_ids):
+        """Deja el webhook con exactamente estos estados como disparadores."""
+        desired = {str(pk) for pk in state_ids}
+        existing = {str(pk) for pk in webhook.webhook_states.values_list("state_id", flat=True)}
+
+        removed = existing - desired
+        if removed:
+            webhook.webhook_states.filter(state_id__in=removed).delete()
+
+        added = desired - existing
+        if not added:
+            return
+
+        # project_id sale del propio estado: WebhookState es un ProjectBaseModel
+        # y cada estado ya pertenece a un proyecto.
+        state_projects = dict(
+            State.all_state_objects.filter(pk__in=added).values_list("pk", "project_id")
+        )
+        WebhookState.objects.bulk_create(
+            [
+                WebhookState(
+                    webhook=webhook,
+                    state_id=pk,
+                    project_id=state_projects[uuid_pk],
+                    workspace_id=webhook.workspace_id,
+                )
+                for pk in added
+                if (uuid_pk := UUID(pk)) in state_projects
+            ],
+            batch_size=100,
+            ignore_conflicts=True,
+        )
 
     def validate_project_ids(self, value):
         """Reject projects that don't belong to this webhook's workspace."""
@@ -108,23 +181,29 @@ class WebhookSerializer(DynamicBaseSerializer):
 
     def create(self, validated_data):
         project_ids = validated_data.pop("project_ids", None)
+        state_ids = validated_data.pop("state_ids", None)
         url = validated_data.get("url", None)
         self._validate_webhook_url(url)
         webhook = Webhook.objects.create(**validated_data)
         if project_ids:
             self._sync_project_scope(webhook, project_ids)
+        if state_ids:
+            self._sync_state_triggers(webhook, state_ids)
         return webhook
 
     def update(self, instance, validated_data):
         # `None` means the caller didn't mention scope, so leave it alone;
         # an empty list explicitly widens the webhook back to workspace-wide.
         project_ids = validated_data.pop("project_ids", None)
+        state_ids = validated_data.pop("state_ids", None)
         url = validated_data.get("url", None)
         if url:
             self._validate_webhook_url(url)
         webhook = super().update(instance, validated_data)
         if project_ids is not None:
             self._sync_project_scope(webhook, project_ids)
+        if state_ids is not None:
+            self._sync_state_triggers(webhook, state_ids)
         return webhook
 
     class Meta:

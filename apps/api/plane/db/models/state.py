@@ -42,6 +42,16 @@ DEFAULT_STATES = [
         "group": StateGroup.STARTED.value,
     },
     {
+        # Pertenece al grupo `started`, no a uno propio: los grupos gobiernan
+        # tableros, burndown y la lógica de completado, y añadir uno rompería
+        # esos cálculos. Para Plane esto es trabajo en curso, igual que
+        # Backlog y Todo son estados distintos dentro de sus propios grupos.
+        "name": "In Review",
+        "color": "#3B82F6",
+        "sequence": 40000,
+        "group": StateGroup.STARTED.value,
+    },
+    {
         "name": "Done",
         "color": "#46A758",
         "sequence": 45000,

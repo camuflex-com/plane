@@ -20,6 +20,13 @@ export interface IWebhook {
   projects?: string[];
   /** Write-only: replaces the scope. Omit to leave it untouched. */
   project_ids?: string[];
+  /**
+   * State ids this webhook fires on. Empty means it fires on every event;
+   * non-empty turns it into a state-transition notifier.
+   */
+  states?: string[];
+  /** Write-only: replaces the state triggers. Omit to leave them untouched. */
+  state_ids?: string[];
 }
 
 export type TWebhookEventTypes = "all" | "individual";

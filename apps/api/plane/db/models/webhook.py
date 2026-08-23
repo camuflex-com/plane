@@ -91,6 +91,37 @@ class WebhookLog(BaseModel):
         return f"{self.event_type} {str(self.webhook)}"
 
 
+class WebhookState(ProjectBaseModel):
+    """
+    Restringe un webhook a transiciones hacia estados concretos.
+
+    Se apunta al estado y no a su grupo a propósito: "In Progress" e
+    "In Review" comparten el grupo `started`, así que filtrar por grupo no
+    permitiría distinguirlos, que es justo el caso de uso.
+
+    Sin filas, el webhook mantiene su comportamiento de siempre y emite por
+    cualquier cambio del issue. Con filas, pasa a ser un notificador de
+    transiciones y solo emite al entrar a esos estados.
+    """
+
+    webhook = models.ForeignKey("db.Webhook", on_delete=models.CASCADE, related_name="webhook_states")
+    state = models.ForeignKey("db.State", on_delete=models.CASCADE, related_name="webhook_states")
+
+    class Meta:
+        unique_together = ["webhook", "state", "deleted_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["webhook", "state"],
+                condition=models.Q(deleted_at__isnull=True),
+                name="webhook_state_unique_webhook_state_when_deleted_at_null",
+            )
+        ]
+        verbose_name = "Webhook State"
+        verbose_name_plural = "Webhook States"
+        db_table = "webhook_states"
+        ordering = ("-created_at",)
+
+
 class ProjectWebhook(ProjectBaseModel):
     webhook = models.ForeignKey("db.Webhook", on_delete=models.CASCADE, related_name="project_webhooks")
 

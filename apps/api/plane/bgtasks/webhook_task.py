@@ -49,6 +49,7 @@ from plane.db.models import (
     IssueLabel,
     IssueAssignee,
     ProjectWebhook,
+    WebhookState,
 )
 from plane.license.utils.instance_value import get_email_configuration
 from plane.utils.email import generate_plain_text_from_html
@@ -194,6 +195,57 @@ def resolve_project_id(event: str, event_id: Union[str, uuid.UUID]) -> Optional[
     except Exception as e:
         log_exception(e, warning=True)
         return None
+
+
+def resolve_entered_state_id(
+    event: str,
+    verb: str,
+    field: Optional[str],
+    new_value: Any,
+    event_id: Union[str, uuid.UUID],
+) -> Optional[uuid.UUID]:
+    """
+    Devuelve el estado al que acaba de entrar un issue, o None si el evento no
+    es una transición de estado.
+
+    Los cambios de estado llegan aquí como `field="state_id"` y `new_value`
+    con el UUID del estado nuevo, porque model_activity recorre el payload
+    crudo de la petición. Un issue recién creado también cuenta como entrada
+    a su estado inicial.
+    """
+    if event != "issue":
+        return None
+
+    if verb == "created":
+        return Issue.all_objects.filter(pk=event_id).values_list("state_id", flat=True).first()
+
+    if verb == "updated" and field in ("state_id", "state") and new_value:
+        try:
+            return uuid.UUID(str(new_value))
+        except (ValueError, AttributeError, TypeError):
+            return None
+
+    return None
+
+
+def filter_webhooks_by_state(webhooks, entered_state_id: Optional[uuid.UUID]):
+    """
+    Aplica los disparadores por estado.
+
+    Un webhook sin filas en WebhookState conserva el comportamiento anterior y
+    emite por cualquier evento. Uno con filas se convierte en un notificador de
+    transiciones: solo emite al entrar a alguno de sus estados, y deja de
+    emitir por cambios de título, asignados o por eventos que no son de issue.
+    """
+    has_triggers = Exists(WebhookState.objects.filter(webhook_id=OuterRef("pk")))
+
+    if entered_state_id is None:
+        return webhooks.annotate(has_triggers=has_triggers).filter(has_triggers=False)
+
+    matches_state = Exists(WebhookState.objects.filter(webhook_id=OuterRef("pk"), state_id=entered_state_id))
+    return webhooks.annotate(has_triggers=has_triggers, matches_state=matches_state).filter(
+        Q(has_triggers=False) | Q(matches_state=True)
+    )
 
 
 def filter_webhooks_by_project(webhooks, project_id: Optional[uuid.UUID]):
@@ -498,6 +550,15 @@ def webhook_activity(
         # Webhooks scoped to specific projects only fire for their own
         # projects; unscoped ones keep firing workspace-wide.
         webhooks = filter_webhooks_by_project(webhooks, resolve_project_id(event=event, event_id=event_id))
+
+        # Y los que tengan disparadores por estado, solo en las transiciones
+        # hacia esos estados.
+        webhooks = filter_webhooks_by_state(
+            webhooks,
+            resolve_entered_state_id(
+                event=event, verb=verb, field=field, new_value=new_value, event_id=event_id
+            ),
+        )
 
         for webhook in webhooks:
             webhook_send_task.delay(

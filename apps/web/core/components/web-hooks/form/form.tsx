@@ -18,6 +18,7 @@ import {
   WebhookOptions,
   WebhookProjectScope,
   WebhookSecretKey,
+  WebhookStateTriggers,
   WebhookToggle,
 } from "@/components/web-hooks";
 import { useWebhook } from "@/hooks/store/use-webhook";
@@ -34,6 +35,11 @@ type Props = {
    * the scope is fixed to that project and the API ignores it anyway.
    */
   showProjectScope?: boolean;
+  /**
+   * When set, shows the state-transition picker for that project's states.
+   * Only meaningful inside a project, where the states are unambiguous.
+   */
+  stateTriggerProjectId?: string;
 };
 
 const initialWebhookPayload: Partial<IWebhook> = {
@@ -46,7 +52,7 @@ const initialWebhookPayload: Partial<IWebhook> = {
 };
 
 export const WebhookForm = observer(function WebhookForm(props: Props) {
-  const { data, onSubmit, handleClose, showProjectScope = true } = props;
+  const { data, onSubmit, handleClose, showProjectScope = true, stateTriggerProjectId } = props;
   // states
   const [webhookEventType, setWebhookEventType] = useState<TWebhookEventTypes>("all");
   // store hooks
@@ -59,7 +65,14 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
     formState: { isSubmitting, errors },
   } = useForm<IWebhook>({
     // `projects` is what the API returns; `project_ids` is what it accepts.
-    defaultValues: { ...initialWebhookPayload, ...data, project_ids: data?.projects ?? [] },
+    defaultValues: {
+      ...initialWebhookPayload,
+      ...data,
+      // `projects`/`states` are what the API returns; the `_ids` variants are
+      // what it accepts.
+      project_ids: data?.projects ?? [],
+      state_ids: data?.states ?? [],
+    },
   });
 
   const handleFormSubmit = async (formData: IWebhook) => {
@@ -99,8 +112,9 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
           {showProjectScope && <WebhookProjectScope control={control} />}
           <WebhookOptions value={webhookEventType} onChange={(val) => setWebhookEventType(val)} />
         </div>
-        <div className="mt-4">
+        <div className="mt-4 space-y-5">
           {webhookEventType === "individual" && <WebhookIndividualEventOptions control={control} />}
+          {stateTriggerProjectId && <WebhookStateTriggers control={control} projectId={stateTriggerProjectId} />}
         </div>
       </div>
       {data ? (

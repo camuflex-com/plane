@@ -56,6 +56,8 @@ class WebhookEndpoint(BaseAPIView):
                     "module",
                     "issue_comment",
                     "projects",
+                "states",
+                    "states",
                 ),
                 many=True,
             )
@@ -76,6 +78,7 @@ class WebhookEndpoint(BaseAPIView):
                     "module",
                     "issue_comment",
                     "projects",
+                    "states",
                 ),
             )
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -145,6 +148,7 @@ PROJECT_WEBHOOK_FIELDS = (
     "cycle",
     "module",
     "issue_comment",
+    "states",
 )
 
 
@@ -180,7 +184,7 @@ class ProjectWebhookEndpoint(BaseAPIView):
 
             serializer = WebhookSerializer(
                 data=data,
-                context={"request": request, "workspace_id": workspace.id},
+                context={"request": request, "workspace_id": workspace.id, "project_id": project_id},
             )
             if serializer.is_valid():
                 serializer.save(workspace_id=workspace.id)
@@ -221,7 +225,7 @@ class ProjectWebhookEndpoint(BaseAPIView):
         serializer = WebhookSerializer(
             webhook,
             data=data,
-            context={"request": request, "workspace_id": webhook.workspace_id},
+            context={"request": request, "workspace_id": webhook.workspace_id, "project_id": project_id},
             partial=True,
             fields=PROJECT_WEBHOOK_FIELDS,
         )
