@@ -55,7 +55,7 @@ function ProjectWebhookDetailsPage() {
     const payload = {
       url: formData.url,
       is_active: formData.is_active,
-      project: formData.project,
+      // `project` no se envía: el backend lo fuerza a false en este ámbito.
       cycle: formData.cycle,
       module: formData.module,
       issue: formData.issue,
@@ -108,7 +108,7 @@ function ProjectWebhookDetailsPage() {
           <WebhookForm
             onSubmit={handleUpdateWebhook}
             data={currentWebhook}
-            showProjectScope={false}
+            scope="project"
             stateTriggerProjectId={projectId?.toString()}
           />
         </div>

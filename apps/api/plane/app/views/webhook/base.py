@@ -137,13 +137,15 @@ class WebhookLogsEndpoint(BaseAPIView):
 
 # Fields returned for project-scoped webhooks. `projects` is omitted on
 # purpose: inside a project these are always scoped to that one project.
+# `project` (el evento de ciclo de vida del proyecto) queda fuera a propósito:
+# un webhook creado dentro de un proyecto no puede emitir "project created"
+# —el proyecto ya existe— y el resto del ciclo de vida es del workspace.
 PROJECT_WEBHOOK_FIELDS = (
     "id",
     "url",
     "is_active",
     "created_at",
     "updated_at",
-    "project",
     "issue",
     "cycle",
     "module",
@@ -181,6 +183,9 @@ class ProjectWebhookEndpoint(BaseAPIView):
             # The scope is the URL's project, never whatever the body claims.
             data = {k: v for k, v in request.data.items() if k != "project_ids"}
             data["project_ids"] = [str(project_id)]
+            # Y los eventos de ciclo de vida del proyecto no se emiten desde
+            # aquí, aunque el cliente los pida.
+            data["project"] = False
 
             serializer = WebhookSerializer(
                 data=data,
@@ -219,8 +224,9 @@ class ProjectWebhookEndpoint(BaseAPIView):
             return Response({"error": "Webhook not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # Scope is fixed by the URL: a project admin can't re-point a webhook
-        # at other projects from here.
+        # at other projects from here, ni activar los eventos de proyecto.
         data = {k: v for k, v in request.data.items() if k != "project_ids"}
+        data["project"] = False
 
         serializer = WebhookSerializer(
             webhook,

@@ -127,15 +127,14 @@ o un snapshot EBS del volumen.
 
 ## Workflows heredados de upstream
 
-`build-branch.yml` (*Branch Build CE*) también se dispara en cada push a
-`preview` y publica en el Docker Hub de makeplane. En este fork fallaba
-siempre por falta de `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, y además
-duplicaba el trabajo: construye las mismas 6 imágenes. Quedó acotado con
-`if: github.repository == 'makeplane/plane'` en su primer job — como todos
-los demás dependen de él, el workflow entero se salta en el fork.
+`build-branch.yml` (*Branch Build CE*) publicaba al Docker Hub de makeplane y
+fallaba en cada push por falta de `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,
+además de duplicar el trabajo: construía las mismas 6 imágenes. Se eliminó
+del fork junto con `feature-deployment.yml` (necesita el Kubernetes y el
+Tailscale de upstream) y `check-version.yml` (apunta a la rama `master`, que
+aquí no existe).
 
-Para reactivarlo habría que quitar ese guard y añadir los secrets de Docker
-Hub.
+Si alguna vez hicieran falta, están en el upstream.
 
 ## Lo que NO cubre
 

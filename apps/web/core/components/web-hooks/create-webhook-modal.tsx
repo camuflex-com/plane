@@ -34,8 +34,8 @@ interface ICreateWebhookModal {
     secretKey: string | null;
   }>;
   onClose: () => void;
-  /** Off inside a project's settings: the scope is the project itself. */
-  showProjectScope?: boolean;
+  /** Which settings screen the modal was opened from. */
+  scope?: "workspace" | "project";
   /** Enables the state-transition picker for that project's states. */
   stateTriggerProjectId?: string;
 }
@@ -47,7 +47,7 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
     currentWorkspace,
     createWebhook,
     clearSecretKey,
-    showProjectScope = true,
+    scope = "workspace",
     stateTriggerProjectId,
   } = props;
   // states
@@ -67,10 +67,14 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
       state_ids: formData.state_ids ?? [],
     };
 
+    // Un webhook de proyecto no emite eventos de proyecto, ni siquiera con
+    // "enviármelo todo": el ciclo de vida del proyecto es del workspace.
+    const allowsProjectEvents = scope === "workspace";
+
     if (webhookEventType === "all")
       payload = {
         ...payload,
-        project: true,
+        project: allowsProjectEvents,
         cycle: true,
         module: true,
         issue: true,
@@ -79,7 +83,7 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
     else
       payload = {
         ...payload,
-        project: formData.project ?? false,
+        project: allowsProjectEvents ? (formData.project ?? false) : false,
         cycle: formData.cycle ?? false,
         module: formData.module ?? false,
         issue: formData.issue ?? false,
@@ -126,7 +130,7 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
         <WebhookForm
           onSubmit={handleCreateWebhook}
           handleClose={handleClose}
-          showProjectScope={showProjectScope}
+          scope={scope}
           stateTriggerProjectId={stateTriggerProjectId}
         />
       ) : (

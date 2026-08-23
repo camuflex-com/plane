@@ -9,15 +9,24 @@ import { Controller } from "react-hook-form";
 import type { IWebhook } from "@plane/types";
 import { Checkbox } from "@plane/ui";
 
-export const INDIVIDUAL_WEBHOOK_OPTIONS: {
+type WebhookEventOption = {
   key: keyof IWebhook;
   label: string;
   description: string;
-}[] = [
+  /**
+   * Project-level webhooks don't offer this one. A webhook created inside a
+   * project can't fire on "project created" — the project already exists —
+   * and project lifecycle belongs to the workspace scope.
+   */
+  workspaceOnly?: boolean;
+};
+
+export const INDIVIDUAL_WEBHOOK_OPTIONS: WebhookEventOption[] = [
   {
     key: "project",
     label: "Projects",
     description: "Project created, updated, or deleted",
+    workspaceOnly: true,
   },
   {
     key: "cycle",
@@ -41,14 +50,21 @@ export const INDIVIDUAL_WEBHOOK_OPTIONS: {
   },
 ];
 
+/** Events offered for a given scope. */
+export const webhookEventOptionsFor = (scope: "workspace" | "project"): WebhookEventOption[] =>
+  scope === "project"
+    ? INDIVIDUAL_WEBHOOK_OPTIONS.filter((option) => !option.workspaceOnly)
+    : INDIVIDUAL_WEBHOOK_OPTIONS;
+
 type Props = {
   control: Control<IWebhook, any>;
+  scope?: "workspace" | "project";
 };
 
-export function WebhookIndividualEventOptions({ control }: Props) {
+export function WebhookIndividualEventOptions({ control, scope = "workspace" }: Props) {
   return (
     <div className="grid grid-cols-1 gap-x-4 gap-y-8 px-6 lg:grid-cols-2">
-      {INDIVIDUAL_WEBHOOK_OPTIONS.map((option) => (
+      {webhookEventOptionsFor(scope).map((option) => (
         <Controller
           key={option.key}
           control={control}

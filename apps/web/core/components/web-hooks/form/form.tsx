@@ -13,6 +13,7 @@ import { Button } from "@plane/propel/button";
 import type { IWebhook, TWebhookEventTypes } from "@plane/types";
 // hooks
 import {
+  webhookEventOptionsFor,
   WebhookIndividualEventOptions,
   WebhookInput,
   WebhookOptions,
@@ -31,10 +32,11 @@ type Props = {
   onSubmit: (data: IWebhook, webhookEventType: TWebhookEventTypes) => Promise<void>;
   handleClose?: () => void;
   /**
-   * Show the project scope picker. Off inside a project's own settings, where
-   * the scope is fixed to that project and the API ignores it anyway.
+   * Which settings screen this form lives in. Drives three differences:
+   * the project scope picker (workspace only), the event list (project
+   * lifecycle is workspace-only) and what "send me everything" means.
    */
-  showProjectScope?: boolean;
+  scope?: "workspace" | "project";
   /**
    * When set, shows the state-transition picker for that project's states.
    * Only meaningful inside a project, where the states are unambiguous.
@@ -52,7 +54,9 @@ const initialWebhookPayload: Partial<IWebhook> = {
 };
 
 export const WebhookForm = observer(function WebhookForm(props: Props) {
-  const { data, onSubmit, handleClose, showProjectScope = true, stateTriggerProjectId } = props;
+  const { data, onSubmit, handleClose, scope = "workspace", stateTriggerProjectId } = props;
+  // Los eventos que esta pantalla ofrece de verdad; el resto no se toca.
+  const eventKeys = webhookEventOptionsFor(scope).map((option) => option.key);
   // states
   const [webhookEventType, setWebhookEventType] = useState<TWebhookEventTypes>("all");
   // store hooks
@@ -67,6 +71,8 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
     // `projects` is what the API returns; `project_ids` is what it accepts.
     defaultValues: {
       ...initialWebhookPayload,
+      // Un webhook de proyecto nunca emite eventos de proyecto.
+      ...(scope === "project" ? { project: false } : {}),
       ...data,
       // `projects`/`states` are what the API returns; the `_ids` variants are
       // what it accepts.
@@ -82,9 +88,11 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
   useEffect(() => {
     if (!data) return;
 
-    if (data.project && data.cycle && data.module && data.issue && data.issue_comment) setWebhookEventType("all");
+    // "Todo" significa todos los eventos de ESTA pantalla, no los cinco
+    // siempre: en un proyecto, `project` no está sobre la mesa.
+    if (eventKeys.every((key) => data[key])) setWebhookEventType("all");
     else setWebhookEventType("individual");
-  }, [data]);
+  }, [data, eventKeys]);
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)}>
@@ -109,11 +117,11 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
             {errors.url && <div className="text-11 text-danger-primary">{errors.url.message}</div>}
           </div>
           {data && <WebhookToggle control={control} />}
-          {showProjectScope && <WebhookProjectScope control={control} />}
+          {scope === "workspace" && <WebhookProjectScope control={control} />}
           <WebhookOptions value={webhookEventType} onChange={(val) => setWebhookEventType(val)} />
         </div>
         <div className="mt-4 space-y-5">
-          {webhookEventType === "individual" && <WebhookIndividualEventOptions control={control} />}
+          {webhookEventType === "individual" && <WebhookIndividualEventOptions control={control} scope={scope} />}
           {stateTriggerProjectId && <WebhookStateTriggers control={control} projectId={stateTriggerProjectId} />}
         </div>
       </div>
