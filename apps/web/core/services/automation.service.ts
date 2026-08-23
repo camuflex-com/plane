@@ -51,6 +51,14 @@ export class AutomationService extends APIService {
       });
   }
 
+  /**
+   * URL del stream de razonamiento. Se construye en vez de consumirse aquí
+   * porque la lee `EventSource`, que gestiona la reconexión por su cuenta.
+   */
+  streamUrl(projectId: string, runId: string): string {
+    return `/automation/api/projects/${projectId}/runs/${runId}/stream`;
+  }
+
   async fetchRunDetail(projectId: string, runId: string): Promise<TAutomationRunDetail> {
     return this.get(`/automation/api/projects/${projectId}/runs/${runId}`)
       .then((response) => response?.data)

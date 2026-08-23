@@ -1,3 +1,5 @@
+// oxlint-disable no-await-in-loop -- leer un stream es intrínsecamente
+// secuencial: cada chunk depende de haber consumido el anterior.
 import { Router, type Request, type Response } from "express";
 import { CursorClient } from "@/clients/cursor";
 import { requestJson } from "@/clients/http";
@@ -160,6 +162,97 @@ export function createApiRouter(db: Db, env: Env): Router {
           : null,
         agent,
       });
+    })
+  );
+
+  /**
+   * Proxy del stream de Cursor.
+   *
+   * Se retransmite en vez de redirigir para que el razonamiento se vea dentro
+   * de Plane, y porque la clave de Cursor no puede salir al navegador: el
+   * orquestador la pone aquí y el navegador solo habla con su propio dominio.
+   */
+  api.get(
+    "/projects/:projectId/runs/:runId/stream",
+    wrap(async (req: Request, res: Response) => {
+      const { projectId, runId } = req.params;
+
+      const config = await getEnabledProject(db, projectId);
+      if (!config) {
+        res.status(404).end();
+        return;
+      }
+      if (!(await canSeeProject(env, req.header("cookie") ?? "", config.planeWorkspaceSlug, projectId))) {
+        res.status(403).end();
+        return;
+      }
+
+      const result = await db.query<RunRow>(`SELECT * FROM runs WHERE id = $1 AND plane_project_id = $2`, [
+        runId,
+        projectId,
+      ]);
+      const row = result.rows[0];
+      if (!row?.cursor_agent_id) {
+        res.status(404).end();
+        return;
+      }
+
+      let cursorRunId: string | undefined;
+      try {
+        cursorRunId = (await cursor.getAgent(row.cursor_agent_id)).latestRunId;
+      } catch (error) {
+        logger.warn("no se pudo resolver el run de Cursor", { error: String(error) });
+      }
+      if (!cursorRunId) {
+        res.status(404).end();
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        // Evita que cualquier proxy intermedio acumule el cuerpo: sin esto el
+        // stream llegaría a golpes o no llegaría.
+        "X-Accel-Buffering": "no",
+      });
+
+      const upstream = await fetch(
+        `${env.CURSOR_BASE_URL}/v1/agents/${row.cursor_agent_id}/runs/${cursorRunId}/stream`,
+        {
+          headers: {
+            Authorization: `Bearer ${env.CURSOR_API_KEY}`,
+            Accept: "text/event-stream",
+            // Permite retomar donde se cortó si el navegador reconecta.
+            ...(req.header("last-event-id") ? { "Last-Event-ID": req.header("last-event-id") as string } : {}),
+          },
+        }
+      );
+
+      if (!upstream.ok || !upstream.body) {
+        res.write(`event: error\ndata: ${JSON.stringify({ status: upstream.status })}\n\n`);
+        res.end();
+        return;
+      }
+
+      // Si el usuario cierra la pestaña hay que soltar la conexión con Cursor;
+      // si no, quedarían streams abiertos consumiendo recursos.
+      const abort = new AbortController();
+      req.on("close", () => abort.abort());
+
+      const reader = upstream.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || abort.signal.aborted) break;
+          res.write(Buffer.from(value));
+        }
+      } catch (error) {
+        logger.warn("stream interrumpido", { error: String(error) });
+      } finally {
+        await reader.cancel().catch(() => undefined);
+        res.end();
+      }
     })
   );
 

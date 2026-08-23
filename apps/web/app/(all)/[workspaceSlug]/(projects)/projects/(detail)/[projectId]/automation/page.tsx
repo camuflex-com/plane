@@ -11,6 +11,7 @@ import useSWR from "swr";
 // plane imports
 import { Loader } from "@plane/ui";
 // components
+import { ThinkingStream } from "@/components/automation-runs";
 import { PageHead } from "@/components/core/page-title";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
@@ -210,14 +211,18 @@ function ProjectAutomationPage() {
                           </div>
                         )}
                         <div className="text-11 text-tertiary uppercase">Razonamiento del agente</div>
-                        {detail?.agent?.result ? (
-                          <pre className="mt-1 text-12 whitespace-pre-wrap text-secondary">{detail.agent.result}</pre>
-                        ) : (
-                          <p className="mt-1 text-12 text-tertiary">
-                            {detail
-                              ? `Sin resumen todavía${detail.agent?.status ? ` (estado en Cursor: ${detail.agent.status})` : ""}.`
-                              : "Cargando…"}
-                          </p>
+                        <div className="mt-2">
+                          <ThinkingStream
+                            url={automationService.streamUrl(projectId!.toString(), run.id)}
+                            active={ACTIVE_STATES.has(run.state)}
+                          />
+                        </div>
+
+                        {detail?.agent?.result && (
+                          <div className="mt-3">
+                            <div className="text-11 text-tertiary uppercase">Resumen final</div>
+                            <pre className="mt-1 text-12 whitespace-pre-wrap text-secondary">{detail.agent.result}</pre>
+                          </div>
                         )}
                       </td>
                     </tr>
