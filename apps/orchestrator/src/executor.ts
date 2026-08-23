@@ -6,6 +6,7 @@ import { GitHubClient, type PullRequest } from "@/clients/github";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
 import {
+  getActiveRunForHeadSha,
   getActiveRunForIssue,
   getActiveRunForPr,
   getEnabledProject,
@@ -43,7 +44,13 @@ export class Executor {
         );
       case "github.check_completed":
         return this.onCheckCompleted(
-          job.payload as { owner: string; repo: string; prNumber: number; conclusion: string }
+          job.payload as {
+            owner: string;
+            repo: string;
+            prNumber: number | null;
+            headSha: string | null;
+            conclusion: string;
+          }
         );
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
@@ -189,20 +196,29 @@ export class Executor {
   private async onCheckCompleted(payload: {
     owner: string;
     repo: string;
-    prNumber: number;
+    prNumber: number | null;
+    headSha: string | null;
     conclusion: string;
   }): Promise<void> {
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
 
-    const run = await getActiveRunForPr(this.db, config.planeProjectId, payload.prNumber);
-    if (!run) return;
+    // El payload de check_run a menudo no trae el PR asociado; el sha sí, y la
+    // run guarda el suyo desde que se abrió el pull request.
+    const run = payload.prNumber
+      ? await getActiveRunForPr(this.db, config.planeProjectId, payload.prNumber)
+      : await getActiveRunForHeadSha(this.db, config.planeProjectId, payload.headSha ?? "");
 
-    const findings = payload.conclusion === "success" ? [] : await this.collectFindings(config, payload.prNumber);
+    if (!run?.prNumber) {
+      logger.info("veredicto sin run asociada", { prNumber: payload.prNumber, headSha: payload.headSha });
+      return;
+    }
+
+    const findings = payload.conclusion === "success" ? [] : await this.collectFindings(config, run.prNumber);
 
     await this.apply(run, config, {
       type: "bugbot_verdict",
-      prNumber: payload.prNumber,
+      prNumber: run.prNumber,
       conclusion: payload.conclusion as never,
       findings,
     });

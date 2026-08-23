@@ -111,7 +111,12 @@ type GitHubPayload = {
   action?: string;
   repository?: { name?: string; owner?: { login?: string } };
   pull_request?: { number?: number; head?: { sha?: string; ref?: string }; draft?: boolean };
-  check_run?: { name?: string; conclusion?: string; pull_requests?: { number?: number }[] };
+  check_run?: {
+    name?: string;
+    conclusion?: string;
+    head_sha?: string;
+    pull_requests?: { number?: number }[];
+  };
 };
 
 async function ingestPlane(db: Db, env: Env, deliveryId: string, payload: PlanePayload): Promise<void> {
@@ -154,8 +159,18 @@ async function ingestPlane(db: Db, env: Env, deliveryId: string, payload: PlaneP
  * nivel de organización llegan eventos de todos los repos, y anotarlos todos
  * haría crecer `deliveries` sin límite con ruido que nunca se procesa.
  */
+/**
+ * Acciones de pull_request que significan "hay un PR listo para revisar".
+ *
+ * `ready_for_review` es imprescindible: Cursor abre sus PRs como BORRADOR y
+ * los marca listos un minuto después. Escuchando solo `opened` se recibe el
+ * borrador, se descarta —correctamente, un borrador no se revisa— y la
+ * transición posterior nunca llega, dejando la run colgada para siempre.
+ */
+const PR_READY_ACTIONS = new Set(["opened", "ready_for_review"]);
+
 function isActionableGitHubEvent(eventName: string, payload: GitHubPayload): boolean {
-  if (eventName === "pull_request") return payload.action === "opened";
+  if (eventName === "pull_request") return PR_READY_ACTIONS.has(payload.action ?? "");
   if (eventName === "check_run") {
     return payload.action === "completed" && /bugbot|cursor/i.test(payload.check_run?.name ?? "");
   }
@@ -174,10 +189,17 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
     return;
   }
 
-  if (eventName === "pull_request" && payload.action === "opened") {
+  if (eventName === "pull_request") {
     const pr = payload.pull_request;
-    // Un PR en borrador todavía no está listo para revisión.
-    if (!pr?.number || !pr.head?.sha || pr.draft) return;
+    if (!pr?.number || !pr.head?.sha) {
+      logger.warn("PR sin número o sin sha, se ignora", { owner, repo, action: payload.action });
+      return;
+    }
+    // Un borrador todavía no se revisa; ya volverá como `ready_for_review`.
+    if (pr.draft) {
+      logger.info("PR en borrador, se espera a que esté listo", { owner, repo, prNumber: pr.number });
+      return;
+    }
     await enqueue(db, "github.pr_opened", {
       owner,
       repo,
@@ -185,21 +207,30 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
       headSha: pr.head.sha,
       branch: pr.head.ref ?? "",
     });
-    logger.info("PR encolado", { owner, repo, prNumber: pr.number });
+    logger.info("PR encolado", { owner, repo, prNumber: pr.number, action: payload.action });
     return;
   }
 
   if (eventName === "check_run" && payload.action === "completed") {
     const check = payload.check_run;
-    if (!check?.name || !/bugbot|cursor/i.test(check.name)) return;
-    const prNumber = check.pull_requests?.[0]?.number;
-    if (!prNumber) return;
+    const prNumber = check?.pull_requests?.[0]?.number;
+    const headSha = check?.head_sha;
+
+    // `pull_requests` viene vacío con frecuencia en los payloads de check_run.
+    // El sha sí está siempre, y la run guarda el suyo, así que sirve de
+    // respaldo para no perder el veredicto.
+    if (!prNumber && !headSha) {
+      logger.warn("veredicto sin PR ni sha, no se puede asociar", { owner, repo, name: check?.name });
+      return;
+    }
+
     await enqueue(db, "github.check_completed", {
       owner,
       repo,
-      prNumber,
-      conclusion: check.conclusion ?? "neutral",
+      prNumber: prNumber ?? null,
+      headSha: headSha ?? null,
+      conclusion: check?.conclusion ?? "neutral",
     });
-    logger.info("veredicto encolado", { owner, repo, prNumber, conclusion: check.conclusion });
+    logger.info("veredicto encolado", { owner, repo, prNumber, headSha, conclusion: check?.conclusion });
   }
 }

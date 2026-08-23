@@ -55,6 +55,17 @@ export async function getActiveRunForIssue(db: Db, issueId: string): Promise<Run
   return res.rows[0] ? toRun(res.rows[0]) : null;
 }
 
+/** Respaldo cuando el payload de check_run no trae el PR asociado. */
+export async function getActiveRunForHeadSha(db: Db, projectId: string, headSha: string): Promise<Run | null> {
+  if (!headSha) return null;
+  const res = await db.query(
+    `SELECT * FROM runs
+      WHERE plane_project_id = $1 AND head_sha = $2 AND state NOT IN ('merged','parked','failed')`,
+    [projectId, headSha]
+  );
+  return res.rows[0] ? toRun(res.rows[0]) : null;
+}
+
 export async function getActiveRunForPr(db: Db, projectId: string, prNumber: number): Promise<Run | null> {
   const res = await db.query(
     `SELECT * FROM runs
