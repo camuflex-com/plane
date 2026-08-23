@@ -345,6 +345,15 @@ export const coreRoutes: RouteConfigEntry[] = [
                 "./(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/automations/page.tsx"
               ),
             ]),
+            // Project Webhooks
+            route(
+              ":workspaceSlug/settings/projects/:projectId/webhooks",
+              "./(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/webhooks/page.tsx"
+            ),
+            route(
+              ":workspaceSlug/settings/projects/:projectId/webhooks/:webhookId",
+              "./(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/webhooks/[webhookId]/page.tsx"
+            ),
           ]),
         ]),
       ]),

@@ -230,6 +230,9 @@ from .webhook.base import (
     WebhookEndpoint,
     WebhookLogsEndpoint,
     WebhookSecretRegenerateEndpoint,
+    ProjectWebhookEndpoint,
+    ProjectWebhookLogsEndpoint,
+    ProjectWebhookSecretRegenerateEndpoint,
 )
 
 from .error_404 import custom_404_view

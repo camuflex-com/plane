@@ -16,6 +16,7 @@ import {
   WebhookIndividualEventOptions,
   WebhookInput,
   WebhookOptions,
+  WebhookProjectScope,
   WebhookSecretKey,
   WebhookToggle,
 } from "@/components/web-hooks";
@@ -28,6 +29,11 @@ type Props = {
   data?: Partial<IWebhook>;
   onSubmit: (data: IWebhook, webhookEventType: TWebhookEventTypes) => Promise<void>;
   handleClose?: () => void;
+  /**
+   * Show the project scope picker. Off inside a project's own settings, where
+   * the scope is fixed to that project and the API ignores it anyway.
+   */
+  showProjectScope?: boolean;
 };
 
 const initialWebhookPayload: Partial<IWebhook> = {
@@ -40,7 +46,7 @@ const initialWebhookPayload: Partial<IWebhook> = {
 };
 
 export const WebhookForm = observer(function WebhookForm(props: Props) {
-  const { data, onSubmit, handleClose } = props;
+  const { data, onSubmit, handleClose, showProjectScope = true } = props;
   // states
   const [webhookEventType, setWebhookEventType] = useState<TWebhookEventTypes>("all");
   // store hooks
@@ -52,7 +58,8 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
     control,
     formState: { isSubmitting, errors },
   } = useForm<IWebhook>({
-    defaultValues: { ...initialWebhookPayload, ...data },
+    // `projects` is what the API returns; `project_ids` is what it accepts.
+    defaultValues: { ...initialWebhookPayload, ...data, project_ids: data?.projects ?? [] },
   });
 
   const handleFormSubmit = async (formData: IWebhook) => {
@@ -89,6 +96,7 @@ export const WebhookForm = observer(function WebhookForm(props: Props) {
             {errors.url && <div className="text-11 text-danger-primary">{errors.url.message}</div>}
           </div>
           {data && <WebhookToggle control={control} />}
+          {showProjectScope && <WebhookProjectScope control={control} />}
           <WebhookOptions value={webhookEventType} onChange={(val) => setWebhookEventType(val)} />
         </div>
         <div className="mt-4">

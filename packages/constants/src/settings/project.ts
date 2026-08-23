@@ -107,6 +107,15 @@ export const PROJECT_SETTINGS: Record<TProjectSettingsTabs, TProjectSettingsItem
     access: [EUserProjectRoles.ADMIN],
     highlight: (pathname: string, baseUrl: string) => pathname === `${baseUrl}/automations/`,
   },
+  webhooks: {
+    key: "webhooks",
+    i18n_label: "workspace_settings.settings.webhooks.title",
+    href: `/webhooks`,
+    // Admin only: webhook payloads carry project data and the secret key can
+    // be regenerated from here.
+    access: [EUserProjectRoles.ADMIN],
+    highlight: (pathname: string, baseUrl: string) => pathname.startsWith(`${baseUrl}/webhooks`),
+  },
 };
 
 export const PROJECT_SETTINGS_FLAT_MAP: TProjectSettingsItem[] = Object.values(PROJECT_SETTINGS);
@@ -125,5 +134,5 @@ export const GROUPED_PROJECT_SETTINGS: Record<PROJECT_SETTINGS_CATEGORY, TProjec
     PROJECT_SETTINGS["labels"],
     PROJECT_SETTINGS["estimates"],
   ],
-  [PROJECT_SETTINGS_CATEGORY.EXECUTION]: [PROJECT_SETTINGS["automations"]],
+  [PROJECT_SETTINGS_CATEGORY.EXECUTION]: [PROJECT_SETTINGS["automations"], PROJECT_SETTINGS["webhooks"]],
 };

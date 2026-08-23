@@ -5,51 +5,53 @@
  */
 
 import { useState } from "react";
+import { useParams } from "next/navigation";
 import { observer } from "mobx-react";
 import useSWR from "swr";
+// plane imports
 import { EUserPermissions, EUserPermissionsLevel } from "@plane/constants";
 import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 import type { IWebhook } from "@plane/types";
-// ui
 // components
 import { LogoSpinner } from "@/components/common/logo-spinner";
 import { PageHead } from "@/components/core/page-title";
 import { SettingsContentWrapper } from "@/components/settings/content-wrapper";
-import { DeleteWebhookModal, WebhookDeleteSection, WebhookForm } from "@/components/web-hooks";
+import { DeleteProjectWebhookModal, WebhookDeleteSection, WebhookForm } from "@/components/web-hooks";
 // hooks
-import { useWebhook } from "@/hooks/store/use-webhook";
-import { useWorkspace } from "@/hooks/store/use-workspace";
+import { useProject } from "@/hooks/store/use-project";
+import { useProjectWebhook } from "@/hooks/store/use-project-webhook";
 import { useUserPermissions } from "@/hooks/store/user";
 // local imports
-import type { Route } from "./+types/page";
-import { WebhookDetailsWorkspaceSettingsHeader } from "./header";
+import { ProjectWebhookDetailsHeader } from "./header";
 
-function WebhookDetailsPage({ params }: Route.ComponentProps) {
+function ProjectWebhookDetailsPage() {
   // states
   const [deleteWebhookModal, setDeleteWebhookModal] = useState(false);
   // router
-  const { workspaceSlug, webhookId } = params;
-  // mobx store
-  const { currentWebhook, fetchWebhookById, updateWebhook } = useWebhook();
-  const { currentWorkspace } = useWorkspace();
+  const { workspaceSlug, projectId, webhookId } = useParams();
+  // store hooks
+  const { getWebhookById, fetchWebhookById, updateWebhook } = useProjectWebhook();
+  const { currentProjectDetails } = useProject();
   const { allowPermissions } = useUserPermissions();
-
-  // TODO: fix this error
-  // useEffect(() => {
-  //   if (isCreated !== "true") clearSecretKey();
-  // }, [clearSecretKey, isCreated]);
   // derived values
-  const isAdmin = allowPermissions([EUserPermissions.ADMIN], EUserPermissionsLevel.WORKSPACE);
-  const pageTitle = currentWorkspace?.name ? `${currentWorkspace.name} - Webhook` : undefined;
+  const isAdmin = allowPermissions([EUserPermissions.ADMIN], EUserPermissionsLevel.PROJECT);
+  const pageTitle = currentProjectDetails?.name ? `${currentProjectDetails.name} - Webhook` : undefined;
+  const currentWebhook = webhookId ? getWebhookById(webhookId.toString()) : null;
 
   useSWR(
-    isAdmin ? `WEBHOOK_DETAILS_${workspaceSlug}_${webhookId}` : null,
-    isAdmin ? () => fetchWebhookById(workspaceSlug, webhookId) : null
+    isAdmin && workspaceSlug && projectId && webhookId
+      ? `PROJECT_WEBHOOK_DETAILS_${workspaceSlug}_${projectId}_${webhookId}`
+      : null,
+    isAdmin && workspaceSlug && projectId && webhookId
+      ? () => fetchWebhookById(workspaceSlug.toString(), projectId.toString(), webhookId.toString())
+      : null
   );
 
   const handleUpdateWebhook = async (formData: IWebhook) => {
-    if (!formData || !formData.id) return;
+    if (!formData?.id || !workspaceSlug || !projectId) return;
 
+    // No project_ids here: the scope is this project and the API rejects
+    // attempts to change it from a project-level route.
     const payload = {
       url: formData.url,
       is_active: formData.is_active,
@@ -58,13 +60,10 @@ function WebhookDetailsPage({ params }: Route.ComponentProps) {
       module: formData.module,
       issue: formData.issue,
       issue_comment: formData.issue_comment,
-      // Always sent so clearing every project widens the webhook back to
-      // workspace-wide; omitting it would leave the old scope in place.
-      project_ids: formData.project_ids ?? [],
     };
 
     try {
-      await updateWebhook(workspaceSlug, formData.id, payload);
+      await updateWebhook(workspaceSlug.toString(), projectId.toString(), formData.id, payload);
       setToast({
         type: TOAST_TYPE.SUCCESS,
         title: "Success!",
@@ -98,17 +97,17 @@ function WebhookDetailsPage({ params }: Route.ComponentProps) {
     );
 
   return (
-    <SettingsContentWrapper header={<WebhookDetailsWorkspaceSettingsHeader />}>
+    <SettingsContentWrapper header={<ProjectWebhookDetailsHeader />}>
       <PageHead title={pageTitle} />
-      <DeleteWebhookModal isOpen={deleteWebhookModal} onClose={() => setDeleteWebhookModal(false)} />
+      <DeleteProjectWebhookModal isOpen={deleteWebhookModal} onClose={() => setDeleteWebhookModal(false)} />
       <div className="w-full space-y-8 overflow-y-auto">
         <div>
-          <WebhookForm onSubmit={handleUpdateWebhook} data={currentWebhook} />
+          <WebhookForm onSubmit={handleUpdateWebhook} data={currentWebhook} showProjectScope={false} />
         </div>
-        {currentWebhook && <WebhookDeleteSection openDeleteModal={() => setDeleteWebhookModal(true)} />}
+        <WebhookDeleteSection openDeleteModal={() => setDeleteWebhookModal(true)} />
       </div>
     </SettingsContentWrapper>
   );
 }
 
-export default observer(WebhookDetailsPage);
+export default observer(ProjectWebhookDetailsPage);

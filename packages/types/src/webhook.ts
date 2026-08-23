@@ -16,6 +16,10 @@ export interface IWebhook {
   secret_key?: string;
   updated_at: string;
   url: string;
+  /** Project ids this webhook is scoped to. Empty means workspace-wide. */
+  projects?: string[];
+  /** Write-only: replaces the scope. Omit to leave it untouched. */
+  project_ids?: string[];
 }
 
 export type TWebhookEventTypes = "all" | "individual";

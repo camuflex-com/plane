@@ -34,10 +34,12 @@ interface ICreateWebhookModal {
     secretKey: string | null;
   }>;
   onClose: () => void;
+  /** Off inside a project's settings: the scope is the project itself. */
+  showProjectScope?: boolean;
 }
 
 export function CreateWebhookModal(props: ICreateWebhookModal) {
-  const { isOpen, onClose, currentWorkspace, createWebhook, clearSecretKey } = props;
+  const { isOpen, onClose, currentWorkspace, createWebhook, clearSecretKey, showProjectScope = true } = props;
   // states
   const [generatedWebhook, setGeneratedKey] = useState<IWebhook | null>(null);
   // router
@@ -49,6 +51,8 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
 
     let payload: Partial<IWebhook> = {
       url: formData.url,
+      // Empty array = workspace-wide, which is the API's default too.
+      project_ids: formData.project_ids ?? [],
     };
 
     if (webhookEventType === "all")
@@ -107,7 +111,7 @@ export function CreateWebhookModal(props: ICreateWebhookModal) {
   return (
     <ModalCore isOpen={isOpen} position={EModalPosition.TOP} width={EModalWidth.XXL} className="p-4 pb-0">
       {!generatedWebhook ? (
-        <WebhookForm onSubmit={handleCreateWebhook} handleClose={handleClose} />
+        <WebhookForm onSubmit={handleCreateWebhook} handleClose={handleClose} showProjectScope={showProjectScope} />
       ) : (
         <GeneratedHookDetails webhookDetails={generatedWebhook} handleClose={handleClose} />
       )}

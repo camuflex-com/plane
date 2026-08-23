@@ -14,7 +14,7 @@ from django.conf import settings
 
 # Module imports
 from .base import DynamicBaseSerializer
-from plane.db.models import Webhook, WebhookLog
+from plane.db.models import Project, ProjectWebhook, Webhook, WebhookLog
 from plane.db.models.webhook import validate_domain, validate_schema
 from plane.utils.ip_address import validate_url
 
@@ -23,6 +23,58 @@ logger = logging.getLogger(__name__)
 
 class WebhookSerializer(DynamicBaseSerializer):
     url = serializers.URLField(validators=[validate_schema, validate_domain])
+
+    # Empty list (or omitted) means workspace-wide: the webhook fires for every
+    # project. That's the behaviour webhooks had before scoping existed, so
+    # existing rows keep working without migration.
+    project_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+    projects = serializers.SerializerMethodField(read_only=True)
+
+    def get_projects(self, obj):
+        return [str(pk) for pk in obj.project_webhooks.values_list("project_id", flat=True)]
+
+    def validate_project_ids(self, value):
+        """Reject projects that don't belong to this webhook's workspace."""
+        if not value:
+            return value
+
+        workspace_id = self.context.get("workspace_id") or getattr(self.instance, "workspace_id", None)
+        if workspace_id is None:
+            return value
+
+        unique_ids = list(dict.fromkeys(value))
+        found = set(
+            Project.objects.filter(workspace_id=workspace_id, pk__in=unique_ids).values_list("pk", flat=True)
+        )
+        missing = [str(pk) for pk in unique_ids if pk not in found]
+        if missing:
+            raise serializers.ValidationError(f"Projects not found in this workspace: {', '.join(missing)}")
+        return unique_ids
+
+    def _sync_project_scope(self, webhook, project_ids):
+        """Replace the webhook's project scope with exactly `project_ids`."""
+        desired = {str(pk) for pk in project_ids}
+        existing = {str(pk) for pk in webhook.project_webhooks.values_list("project_id", flat=True)}
+
+        removed = existing - desired
+        if removed:
+            webhook.project_webhooks.filter(project_id__in=removed).delete()
+
+        added = desired - existing
+        if added:
+            ProjectWebhook.objects.bulk_create(
+                [
+                    ProjectWebhook(webhook=webhook, project_id=pk, workspace_id=webhook.workspace_id)
+                    for pk in added
+                ],
+                batch_size=100,
+                ignore_conflicts=True,
+            )
 
     def _validate_webhook_url(self, url):
         """Validate a webhook URL against SSRF and disallowed domain rules."""
@@ -55,15 +107,25 @@ class WebhookSerializer(DynamicBaseSerializer):
             raise serializers.ValidationError({"url": "URL domain or its subdomain is not allowed."})
 
     def create(self, validated_data):
+        project_ids = validated_data.pop("project_ids", None)
         url = validated_data.get("url", None)
         self._validate_webhook_url(url)
-        return Webhook.objects.create(**validated_data)
+        webhook = Webhook.objects.create(**validated_data)
+        if project_ids:
+            self._sync_project_scope(webhook, project_ids)
+        return webhook
 
     def update(self, instance, validated_data):
+        # `None` means the caller didn't mention scope, so leave it alone;
+        # an empty list explicitly widens the webhook back to workspace-wide.
+        project_ids = validated_data.pop("project_ids", None)
         url = validated_data.get("url", None)
         if url:
             self._validate_webhook_url(url)
-        return super().update(instance, validated_data)
+        webhook = super().update(instance, validated_data)
+        if project_ids is not None:
+            self._sync_project_scope(webhook, project_ids)
+        return webhook
 
     class Meta:
         model = Webhook

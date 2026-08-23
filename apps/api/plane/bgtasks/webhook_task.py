@@ -16,7 +16,7 @@ from celery import shared_task
 
 # Django imports
 from django.conf import settings
-from django.db.models import Prefetch
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.core.serializers.json import DjangoJSONEncoder
 from django.template.loader import render_to_string
@@ -48,6 +48,7 @@ from plane.db.models import (
     IntakeIssue,
     IssueLabel,
     IssueAssignee,
+    ProjectWebhook,
 )
 from plane.license.utils.instance_value import get_email_configuration
 from plane.utils.email import generate_plain_text_from_html
@@ -166,6 +167,53 @@ def get_model_data(event: str, event_id: Union[str, List[str]], many: bool = Fal
             return serializer(queryset, many=many).data
     except ObjectDoesNotExist:
         raise ObjectDoesNotExist(f"No {event} found with id: {event_id}")
+
+
+def resolve_project_id(event: str, event_id: Union[str, uuid.UUID]) -> Optional[uuid.UUID]:
+    """
+    Resolve which project an event belongs to, so webhooks scoped to specific
+    projects can be filtered.
+
+    Returns None when the project can't be determined — callers treat that as
+    "workspace-wide only" and skip project-scoped webhooks rather than risk
+    delivering an event to a project that doesn't own it.
+
+    Uses `all_objects` on purpose: on `deleted` events the row is already
+    soft-deleted and the default manager would filter it out, which would drop
+    delete notifications for every project-scoped webhook.
+    """
+    if event == "project":
+        return event_id
+
+    model = MODEL_MAPPER.get(event)
+    if model is None or not hasattr(model, "project_id"):
+        return None
+
+    try:
+        return model.all_objects.filter(pk=event_id).values_list("project_id", flat=True).first()
+    except Exception as e:
+        log_exception(e, warning=True)
+        return None
+
+
+def filter_webhooks_by_project(webhooks, project_id: Optional[uuid.UUID]):
+    """
+    Narrow a webhook queryset to those that should fire for `project_id`.
+
+    A webhook with no ProjectWebhook rows is workspace-wide and fires for every
+    project — that's the pre-existing behaviour, so webhooks created before
+    project scoping existed keep working untouched.
+    """
+    is_scoped = Exists(ProjectWebhook.objects.filter(webhook_id=OuterRef("pk")))
+
+    if project_id is None:
+        return webhooks.annotate(is_scoped=is_scoped).filter(is_scoped=False)
+
+    covers_project = Exists(ProjectWebhook.objects.filter(webhook_id=OuterRef("pk"), project_id=project_id))
+    return (
+        webhooks.annotate(is_scoped=is_scoped, covers_project=covers_project)
+        .filter(Q(is_scoped=False) | Q(covers_project=True))
+    )
 
 
 @shared_task
@@ -446,6 +494,10 @@ def webhook_activity(
 
         if event == "issue_comment":
             webhooks = webhooks.filter(issue_comment=True)
+
+        # Webhooks scoped to specific projects only fire for their own
+        # projects; unscoped ones keep firing workspace-wide.
+        webhooks = filter_webhooks_by_project(webhooks, resolve_project_id(event=event, event_id=event_id))
 
         for webhook in webhooks:
             webhook_send_task.delay(
