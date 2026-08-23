@@ -48,9 +48,16 @@ condición de confianza OIDC, y así se leen en los logs.
 |---|---|
 | `AWS_REGION` | `us-east-1` |
 | `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::482545836518:role/plane-github-actions-deploy` |
-| `ECR_REGISTRY` | `482545836518.dkr.ecr.us-east-1.amazonaws.com` |
 | `EC2_INSTANCE_ID` | `i-09ff0ee64a00c4195` |
 | `HEALTH_HOST` | `plane.camuflex.com` |
+
+El host de ECR **no se configura**. Se deriva en cada job con
+`aws sts get-caller-identity` sobre la cuenta en la que el rol ya está
+autenticado. Se hizo así después de que un `ECR_REGISTRY` mal escrito hiciera
+fallar el `docker login` con un `400 Bad Request` del registry —un error que
+no dice nada sobre su causa real—. Derivarlo elimina esa clase entera de
+fallo: no puede traer un `https://`, una barra final ni un espacio invisible.
+Si quedó un secret `ECR_REGISTRY` de antes, ya no se lee y se puede borrar.
 
 El job `deploy` usa el environment `production`. Si no existe, GitHub lo crea
 al primer run; puedes añadirle *required reviewers* para exigir aprobación

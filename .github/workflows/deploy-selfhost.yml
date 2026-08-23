@@ -10,9 +10,10 @@ name: Deploy self-hosted
 # Configuración requerida (ver deployments/camuflex/README.md):
 #   AWS_REGION           us-east-1
 #   AWS_DEPLOY_ROLE_ARN  arn:aws:iam::<cuenta>:role/plane-github-actions-deploy
-#   ECR_REGISTRY         <cuenta>.dkr.ecr.us-east-1.amazonaws.com
 #   EC2_INSTANCE_ID      i-xxxxxxxxxxxxxxxxx
 #   HEALTH_HOST          plane.camuflex.com
+#
+# El host de ECR no se configura: se deriva de la cuenta autenticada.
 #
 # Se aceptan como Variables o como Secrets, pero tienen que estar a nivel de
 # REPOSITORIO: los jobs de build no declaran environment y no verían las que
@@ -45,7 +46,6 @@ permissions:
 env:
   AWS_REGION: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
   AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY || secrets.ECR_REGISTRY }}
   EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID || secrets.EC2_INSTANCE_ID }}
   HEALTH_HOST: ${{ vars.HEALTH_HOST || secrets.HEALTH_HOST }}
 
@@ -64,7 +64,6 @@ jobs:
           missing=""
           [ -n "${AWS_REGION:-}" ]          || missing="$missing AWS_REGION"
           [ -n "${AWS_DEPLOY_ROLE_ARN:-}" ] || missing="$missing AWS_DEPLOY_ROLE_ARN"
-          [ -n "${ECR_REGISTRY:-}" ]        || missing="$missing ECR_REGISTRY"
           [ -n "${EC2_INSTANCE_ID:-}" ]     || missing="$missing EC2_INSTANCE_ID"
           [ -n "${HEALTH_HOST:-}" ]         || missing="$missing HEALTH_HOST"
           if [ -n "$missing" ]; then
@@ -129,9 +128,23 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login en ECR
+        id: ecr
         run: |
+          # pipefail importa: sin el, un fallo de `aws` deja pasar una
+          # contraseña vacía a docker login y el error sale como un 400
+          # opaco del registry en vez de como el fallo real.
+          set -euo pipefail
+
+          # El registry se deriva de la cuenta en la que ya estamos
+          # autenticados, en vez de configurarse a mano: así no puede
+          # traer un https://, una barra final ni un espacio invisible.
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
           aws ecr get-login-password --region "$AWS_REGION" \
-            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+          echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -145,8 +158,8 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ env.ECR_REGISTRY }}/${{ matrix.image }}:${{ needs.setup.outputs.image_tag }}
-            ${{ env.ECR_REGISTRY }}/${{ matrix.image }}:latest
+            ${{ steps.ecr.outputs.registry }}/${{ matrix.image }}:${{ needs.setup.outputs.image_tag }}
+            ${{ steps.ecr.outputs.registry }}/${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
 
@@ -172,7 +185,11 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
         run: |
-          set -eu
+          set -euo pipefail
+
+          # Mismo criterio que en el build: derivar en vez de configurar.
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
           # Los archivos viajan en base64 dentro del propio comando SSM, así la
           # instancia corre siempre exactamente lo que hay en este commit y no
