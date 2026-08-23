@@ -33,13 +33,18 @@ export class CursorClient {
     baseBranch: string;
     name?: string;
   }): Promise<CreatedAgent> {
+    // Los nombres importan y no son los obvios: la API espera `url` y
+    // `startingRef` dentro de cada repo, no `repoUrl`/`baseBranch`. Con los
+    // nombres equivocados responde `validation_error: "Required"` sin decir
+    // qué campo falta.
     const body: Record<string, unknown> = {
       prompt: { text: input.prompt },
-      repos: [{ repoUrl: input.repoUrl, baseBranch: input.baseBranch }],
+      repos: [{ url: input.repoUrl, startingRef: input.baseBranch }],
       autoCreatePR: true,
     };
     if (input.name) body.name = input.name;
-    if (this.env.CURSOR_MODEL) body.model = this.env.CURSOR_MODEL;
+    // `model` también es un objeto, no un string.
+    if (this.env.CURSOR_MODEL) body.model = { id: this.env.CURSOR_MODEL };
 
     return requestJson<CreatedAgent>(`${this.env.CURSOR_BASE_URL}/v1/agents`, {
       method: "POST",
