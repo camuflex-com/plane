@@ -1,12 +1,23 @@
 import type { Env } from "@/env";
 import { requestJson } from "./http";
 
-export type CheckRun = { name: string; status: string; conclusion: string | null };
+/**
+ * `mergeable_state` resume en un campo lo que antes consultábamos con la API
+ * de checks: `clean` significa sin conflictos y con todos los checks
+ * requeridos en verde. Usarlo evita pedir el permiso "Checks" del token.
+ *
+ * `mergeable` llega como null mientras GitHub calcula el merge; en ese caso
+ * hay que reintentar, no asumir nada.
+ */
+export type MergeableState = "clean" | "blocked" | "unstable" | "dirty" | "behind" | "draft" | "unknown";
+
 export type PullRequest = {
   number: number;
   state: string;
   merged: boolean;
   draft: boolean;
+  mergeable: boolean | null;
+  mergeable_state: MergeableState;
   head: { sha: string; ref: string };
 };
 
@@ -49,14 +60,6 @@ export class GitHubClient {
     });
   }
 
-  async listCheckRuns(owner: string, repo: string, sha: string): Promise<CheckRun[]> {
-    const res = await requestJson<{ check_runs: CheckRun[] }>(
-      this.repoUrl(owner, repo, `commits/${sha}/check-runs?per_page=100`),
-      { headers: this.headers }
-    );
-    return res.check_runs ?? [];
-  }
-
   /** Comentarios en línea del PR: de ahí sale el detalle de los hallazgos. */
   async listReviewComments(owner: string, repo: string, prNumber: number) {
     return requestJson<{ user: { login: string }; body: string; path: string; line: number | null }[]>(
@@ -75,6 +78,3 @@ export class GitHubClient {
     });
   }
 }
-
-/** Un check se considera de Bugbot si su nombre lo menciona. */
-export const isBugbotCheck = (name: string) => /bugbot|cursor/i.test(name);

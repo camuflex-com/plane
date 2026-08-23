@@ -100,9 +100,27 @@ lo rechaza en vez de lanzar un agente sobre una issue que no toca.
 
 En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request` y `check_run`.
 
+### Permisos del `GITHUB_TOKEN`
+
+Fine-grained PAT con _resource owner_ la organización, acotado al repo:
+
+| Permiso       | Nivel          |
+| ------------- | -------------- |
+| Contents      | Read and write |
+| Pull requests | Read and write |
+| Metadata      | Read-only      |
+
+No hace falta **Checks**: el veredicto de Bugbot llega en el propio payload del
+webhook, y para el resto de la CI se usa `mergeable_state` del pull request,
+que cubre "Pull requests: read".
+
 ## Límites conocidos
 
-- **El merge es automático.** Se exige Bugbot en verde y ningún otro check en rojo, y se manda el `sha` revisado para que GitHub rechace el merge si alguien empujó algo después. Aun así, Bugbot en verde no significa que el cambio sea correcto.
+- **El merge es automático.** Se exige Bugbot en verde y que el PR esté en
+  `mergeable_state: clean` —sin conflictos y con los checks requeridos en
+  verde—, y se manda el `sha` revisado para que GitHub lo rechace si alguien
+  empujó algo después. Aun así, Bugbot en verde no significa que el cambio sea
+  correcto.
 - **`max_attempts` frena los rebotes.** Agotados los intentos la run se aparca y comenta en la issue. Sin ese tope, un bug que el agente no sepa arreglar daría vueltas quemando dinero.
 - **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual.
 - `project_config` se edita por SQL; no hay interfaz.

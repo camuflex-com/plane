@@ -2,7 +2,7 @@
 // reintentos con backoff, sondeo de la cola y acciones que deben aplicarse
 // en orden. Paralelizarlas rompería justamente lo que se busca.
 import { CursorClient } from "@/clients/cursor";
-import { GitHubClient, isBugbotCheck } from "@/clients/github";
+import { GitHubClient, type PullRequest } from "@/clients/github";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
 import {
@@ -119,7 +119,7 @@ export class Executor {
 
       case "merge_pr": {
         const pr = await this.github.getPullRequest(owner, repo, action.prNumber);
-        await this.assertMergeable(config, pr.head.sha, action.prNumber);
+        assertMergeable(pr);
         await this.github.mergePullRequest(owner, repo, action.prNumber, pr.head.sha);
         logger.info("PR mergeado", { runId: run.id, prNumber: action.prNumber });
         return;
@@ -128,24 +128,6 @@ export class Executor {
       case "park":
         logger.warn("run aparcada", { runId: run.id, reason: action.reason });
         return;
-    }
-  }
-
-  /**
-   * Mergear con CI en rojo sería un fallo, no una función: Bugbot en verde
-   * dice que no encontró bugs, no que el resto de la suite pase.
-   */
-  private async assertMergeable(config: ProjectConfig, sha: string, prNumber: number): Promise<void> {
-    const checks = await this.github.listCheckRuns(config.githubOwner, config.githubRepo, sha);
-    const failing = checks.filter(
-      (c) =>
-        c.status === "completed" &&
-        c.conclusion !== null &&
-        !["success", "neutral", "skipped"].includes(c.conclusion) &&
-        !isBugbotCheck(c.name)
-    );
-    if (failing.length > 0) {
-      throw new Error(`No se mergea el PR #${prNumber}: hay checks en rojo (${failing.map((c) => c.name).join(", ")})`);
     }
   }
 
@@ -258,6 +240,29 @@ export class Executor {
       attempts: Number(row.attempts),
     };
     await this.apply(run, config, { type: "agent_stale", minutes: payload.minutes });
+  }
+}
+
+/**
+ * Mergear con CI en rojo sería un fallo, no una función: Bugbot en verde dice
+ * que no encontró bugs, no que el resto de la suite pase.
+ *
+ * Lanzar en vez de devolver false es intencionado: el job reintenta con
+ * backoff, que es justo lo que hace falta cuando GitHub todavía está
+ * calculando el merge (`mergeable === null`) o cuando la rama está detrás.
+ */
+export function assertMergeable(pr: PullRequest): void {
+  if (pr.merged) {
+    throw new Error(`El PR #${pr.number} ya está mergeado`);
+  }
+  if (pr.mergeable === null || pr.mergeable_state === "unknown") {
+    throw new Error(`GitHub aún calcula si el PR #${pr.number} es mergeable; se reintenta`);
+  }
+  if (pr.mergeable_state !== "clean") {
+    throw new Error(
+      `No se mergea el PR #${pr.number}: mergeable_state = "${pr.mergeable_state}" ` +
+        `(solo "clean" garantiza sin conflictos y con los checks requeridos en verde)`
+    );
   }
 }
 
