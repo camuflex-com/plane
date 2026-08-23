@@ -2,7 +2,16 @@ import type { Env } from "@/env";
 import { requestJson } from "./http";
 
 type State = { id: string; name: string; group: string };
-type Issue = { id: string; name: string; description_stripped: string | null; state: string };
+type Issue = { id: string; name: string; description_stripped: string | null; state: string; sequence_id?: number };
+
+export type CreateIssueInput = {
+  name: string;
+  description?: string;
+  priority?: string;
+  stateName?: string;
+  externalId?: string;
+  externalSource?: string;
+};
 
 /** Nombres de los estados que maneja el ciclo. Deben existir en el proyecto. */
 export const STATE_NAMES = {
@@ -36,11 +45,14 @@ export class PlaneClient {
    * claro que dejar la issue en un limbo silencioso.
    */
   async resolveStateId(slug: string, projectId: string, target: TargetState): Promise<string> {
-    const wanted = STATE_NAMES[target];
+    return this.resolveStateByName(slug, projectId, STATE_NAMES[target]);
+  }
+
+  async resolveStateByName(slug: string, projectId: string, wanted: string): Promise<string> {
     const page = await requestJson<{ results: State[] }>(this.url(slug, `projects/${projectId}/states/`), {
       headers: this.headers,
     });
-    const match = page.results.find((s) => s.name.toLowerCase() === wanted.toLowerCase());
+    const match = page.results.find((s) => s.name.toLowerCase() === wanted.trim().toLowerCase());
     if (!match) {
       throw new Error(`El proyecto ${projectId} no tiene un estado llamado "${wanted}"`);
     }
@@ -61,6 +73,31 @@ export class PlaneClient {
       method: "POST",
       headers: this.headers,
       body: JSON.stringify({ comment_html: toHtml(markdown) }),
+    });
+  }
+
+  /**
+   * Crea la issue a nombre del bot: el token es `PLANE_API_KEY`, así que Plane
+   * atribuye la autoría a esa cuenta.
+   */
+  async createIssue(slug: string, projectId: string, input: CreateIssueInput): Promise<Issue> {
+    const body: Record<string, unknown> = {
+      name: input.name,
+      description_html: toHtml(input.description ?? "") || "<p></p>",
+    };
+    if (input.priority) body.priority = input.priority;
+    if (input.externalId) {
+      body.external_id = input.externalId;
+      body.external_source = input.externalSource ?? "camuflex-backend";
+    }
+    if (input.stateName) {
+      body.state = await this.resolveStateByName(slug, projectId, input.stateName);
+    }
+
+    return requestJson<Issue>(this.url(slug, `projects/${projectId}/work-items/`), {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(body),
     });
   }
 }

@@ -101,6 +101,21 @@ lo rechaza en vez de lanzar un agente sobre una issue que no toca.
 
 En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`.
 
+### Issues desde camuflex-backend
+
+`POST https://plane.camuflex.com/automation/issues` crea una issue a nombre del bot. Auth: cabecera `X-API-Key` con el mismo `PLANE_API_KEY`. El backend la lee de SSM (`/camuflex/prod/plane/api-key`).
+
+```json
+{
+  "name": "Título",
+  "description": "Markdown opcional",
+  "priority": "high",
+  "state": "In Progress"
+}
+```
+
+Sin `projectId` se usa el proyecto de `camuflex-com/camuflex-backend` en `project_config`. `state` es el nombre del estado en Plane; si se omite, queda el default del proyecto. `externalId` evita duplicados si el backend reintenta.
+
 ### Permisos del `GITHUB_TOKEN`
 
 Fine-grained PAT con _resource owner_ la organización, acotado al repo:

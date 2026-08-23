@@ -1,11 +1,14 @@
-import express, { Router, type Express } from "express";
+import express, { Router, type Express, type Request, type Response } from "express";
 import { createApiRouter } from "@/api";
+import { HttpError } from "@/clients/http";
+import { PlaneClient } from "@/clients/plane";
 import { claimDelivery, type Db } from "@/db";
 import type { Env } from "@/env";
 import { isBugbot, isBugbotCheck } from "@/executor";
+import { createIngestedIssue, parseIssuePayload, resolveIngestProject } from "@/ingest-issue";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
-import { verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
+import { verifyApiKey, verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
 
 /**
  * Prefijo bajo el que se sirve todo.
@@ -32,6 +35,17 @@ export function createServer(db: Db, env: Env): Express {
 
   routes.get("/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  /**
+   * Ingesta de issues desde camuflex-backend. Auth con la misma API key del
+   * bot (`X-API-Key`); con ella se crea la issue para que quede a su nombre.
+   */
+  routes.post("/issues", (req, res) => {
+    ingestExternalIssue(db, env, req, res).catch((error: unknown) => {
+      logger.error("fallo creando issue", { error: String(error) });
+      if (!res.headersSent) res.status(500).json({ error: "error interno" });
+    });
   });
 
   routes.post("/webhooks/plane", (req, res) => {
@@ -97,6 +111,39 @@ export function createServer(db: Db, env: Env): Express {
   app.use(BASE_PATH, routes);
 
   return app;
+}
+
+async function ingestExternalIssue(db: Db, env: Env, req: Request, res: Response): Promise<void> {
+  if (!verifyApiKey(req.header("x-api-key"), env.PLANE_API_KEY)) {
+    logger.warn("API key inválida al crear issue");
+    res.status(401).json({ error: "no autorizado" });
+    return;
+  }
+
+  const raw = req.body instanceof Buffer ? req.body.toString("utf8") : "";
+  const parsed = parseIssuePayload(raw);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  const config = await resolveIngestProject(db, parsed.payload);
+  if (!config) {
+    res.status(404).json({ error: "proyecto no habilitado" });
+    return;
+  }
+
+  try {
+    const issue = await createIngestedIssue(new PlaneClient(env), config, parsed.payload);
+    logger.info("issue creada desde el backend", { issueId: issue.id, projectId: issue.projectId });
+    res.status(201).json(issue);
+  } catch (error: unknown) {
+    if (error instanceof HttpError && error.status === 409) {
+      res.status(409).json({ error: "issue duplicada" });
+      return;
+    }
+    throw error;
+  }
 }
 
 type PlanePayload = {

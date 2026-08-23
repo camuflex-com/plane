@@ -27,3 +27,12 @@ export function verifyGitHubSignature(rawBody: string, signature: string | undef
   const expected = "sha256=" + createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
   return safeEqual(expected, signature);
 }
+
+/**
+ * Clave de API del bot (`X-API-Key`). El backend de Camuflex la lee de SSM
+ * y la manda igual que contra la API de Plane.
+ */
+export function verifyApiKey(provided: string | undefined, expected: string): boolean {
+  if (!provided) return false;
+  return safeEqual(provided, expected);
+}

@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
+import { verifyApiKey, verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
 
 const SECRET = "un-secreto-cualquiera";
 const BODY = JSON.stringify({ event: "issue", data: { id: "abc" } });
@@ -31,6 +31,20 @@ describe("firma de Plane", () => {
   it("rechaza una firma de longitud distinta sin lanzar", () => {
     expect(() => verifyPlaneSignature(BODY, "corta", SECRET)).not.toThrow();
     expect(verifyPlaneSignature(BODY, "corta", SECRET)).toBe(false);
+  });
+});
+
+describe("API key del bot", () => {
+  it("acepta la clave exacta", () => {
+    expect(verifyApiKey("plane_api_abc", "plane_api_abc")).toBe(true);
+  });
+
+  it("rechaza si falta la cabecera", () => {
+    expect(verifyApiKey(undefined, "plane_api_abc")).toBe(false);
+  });
+
+  it("rechaza otra clave", () => {
+    expect(verifyApiKey("plane_api_xyz", "plane_api_abc")).toBe(false);
   });
 });
 
