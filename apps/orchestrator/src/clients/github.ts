@@ -1,5 +1,5 @@
 import type { Env } from "@/env";
-import { requestJson } from "./http";
+import { HttpError, requestJson } from "./http";
 
 /**
  * `mergeable_state` resume en un campo lo que antes consultábamos con la API
@@ -68,6 +68,23 @@ export class GitHubClient {
     );
   }
 
+  async listReviews(owner: string, repo: string, prNumber: number) {
+    return requestJson<
+      { id: number; user: { login: string }; body: string; state: string; submitted_at: string; commit_id: string }[]
+    >(this.repoUrl(owner, repo, `pulls/${prNumber}/reviews?per_page=100`), { headers: this.headers });
+  }
+
+  /**
+   * Checks del commit. Hace falta permiso Checks:read; si no está, GitHub
+   * responde 403 y el llamador se apoya en las reviews.
+   */
+  async listCheckRuns(owner: string, repo: string, ref: string) {
+    const data = await requestJson<{
+      check_runs: { name: string; status: string; conclusion: string | null; head_sha: string }[];
+    }>(this.repoUrl(owner, repo, `commits/${ref}/check-runs?per_page=100`), { headers: this.headers });
+    return data.check_runs ?? [];
+  }
+
   async mergePullRequest(owner: string, repo: string, prNumber: number, sha: string): Promise<void> {
     // Se manda `sha`: si alguien empujó al PR entre la revisión y el merge,
     // GitHub devuelve 409 y no se mergea código que Bugbot nunca vio.
@@ -76,5 +93,25 @@ export class GitHubClient {
       headers: this.headers,
       body: JSON.stringify({ merge_method: "squash", sha }),
     });
+  }
+
+  /**
+   * Borra la rama del PR. 404 = ya no está, que es el resultado que queremos.
+   * No se llama con `main`/`master`: eso lo filtra el executor.
+   */
+  async deleteBranch(owner: string, repo: string, branch: string): Promise<void> {
+    const encoded = branch
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+    try {
+      await requestJson(this.repoUrl(owner, repo, `git/refs/heads/${encoded}`), {
+        method: "DELETE",
+        headers: this.headers,
+      });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return;
+      throw error;
+    }
   }
 }

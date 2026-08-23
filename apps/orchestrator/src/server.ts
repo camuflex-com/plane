@@ -2,7 +2,7 @@ import express, { Router, type Express } from "express";
 import { createApiRouter } from "@/api";
 import { claimDelivery, type Db } from "@/db";
 import type { Env } from "@/env";
-import { isBugbot } from "@/executor";
+import { isBugbot, isBugbotCheck } from "@/executor";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
 import { verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
@@ -117,6 +117,12 @@ type GitHubPayload = {
   action?: string;
   repository?: { name?: string; owner?: { login?: string } };
   pull_request?: { number?: number; head?: { sha?: string; ref?: string }; draft?: boolean };
+  check_run?: {
+    name?: string;
+    conclusion?: string | null;
+    head_sha?: string;
+    pull_requests?: { number?: number }[];
+  };
   review?: {
     id?: number;
     state?: string;
@@ -182,10 +188,18 @@ function isActionableGitHubEvent(eventName: string, payload: GitHubPayload): boo
     const action = payload.action ?? "";
     return PR_READY_ACTIONS.has(action) || PR_SYNC_ACTIONS.has(action);
   }
-  // El check_run de Bugbot completa minutos antes de la review. No se usa
-  // como veredicto: se espera a que Cursor[bot] envíe la revisión.
   if (eventName === "pull_request_review") {
     return payload.action === "submitted" && isBugbot(payload.review?.user?.login);
+  }
+  // Sin hallazgos Bugbot NO envía pull_request_review: solo pone el check en
+  // verde. El `neutral` del mismo check llega antes de los comentarios y se
+  // ignora; solo el success cuenta como "aprobó".
+  if (eventName === "check_run") {
+    return (
+      payload.action === "completed" &&
+      payload.check_run?.conclusion === "success" &&
+      isBugbotCheck(payload.check_run?.name)
+    );
   }
   return false;
 }
@@ -253,5 +267,23 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
       reviewId: review.id,
       state: review.state,
     });
+    return;
+  }
+
+  if (eventName === "check_run" && payload.action === "completed") {
+    const check = payload.check_run;
+    const prNumber = check?.pull_requests?.[0]?.number ?? null;
+    const headSha = check?.head_sha ?? null;
+    if (!prNumber && !headSha) {
+      logger.warn("check de Bugbot en verde sin PR ni sha", { owner, repo, name: check?.name });
+      return;
+    }
+    await enqueue(db, "github.bugbot_check_success", {
+      owner,
+      repo,
+      prNumber,
+      headSha,
+    });
+    logger.info("Bugbot en verde, se encola el merge", { owner, repo, prNumber, headSha });
   }
 }

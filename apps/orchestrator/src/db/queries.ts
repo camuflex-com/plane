@@ -76,6 +76,45 @@ export async function getActiveRunForPr(db: Db, projectId: string, prNumber: num
 }
 
 /**
+ * Incluye runs aparcadas: un success de Bugbot que llega tarde (tras un
+ * park prematuro o un reinicio) tiene que poder mergear.
+ */
+export async function getRunForBugbot(
+  db: Db,
+  projectId: string,
+  prNumber: number | null,
+  headSha: string | null
+): Promise<Run | null> {
+  if (prNumber) {
+    const byPr = await db.query(
+      `SELECT * FROM runs
+        WHERE plane_project_id = $1 AND pr_number = $2 AND state NOT IN ('merged','failed')
+        ORDER BY updated_at DESC LIMIT 1`,
+      [projectId, prNumber]
+    );
+    if (byPr.rows[0]) return toRun(byPr.rows[0]);
+  }
+  if (headSha) {
+    const bySha = await db.query(
+      `SELECT * FROM runs
+        WHERE plane_project_id = $1 AND head_sha = $2 AND state NOT IN ('merged','failed')
+        ORDER BY updated_at DESC LIMIT 1`,
+      [projectId, headSha]
+    );
+    if (bySha.rows[0]) return toRun(bySha.rows[0]);
+  }
+  return null;
+}
+
+export async function findRunsAwaitingBugbot(db: Db): Promise<Run[]> {
+  const res = await db.query(
+    `SELECT * FROM runs
+      WHERE pr_number IS NOT NULL AND state IN ('in_review', 'fixing', 'parked')`
+  );
+  return res.rows.map(toRun);
+}
+
+/**
  * Crea la run. El índice único parcial hace que dos eventos simultáneos de
  * "entra a In Progress" no puedan crear dos runs para la misma issue: el
  * segundo choca y devuelve null.

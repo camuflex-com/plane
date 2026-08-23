@@ -69,10 +69,14 @@ const NOTHING = (reason: string): Decision => ({ nextState: null, actions: [], i
  * `run` es null cuando todavía no existe una run para esa issue.
  */
 export function decide(run: Run | null, event: Event, maxAttempts: number): Decision {
-  // Una run terminada no reacciona a nada. Es la última barrera contra que un
-  // evento tardío de GitHub reabra un ciclo ya cerrado.
+  // Una run terminada no reacciona a nada, salvo un success de Bugbot sobre
+  // una run aparcada: el park suele ser un falso positivo (check `neutral`
+  // antes de la review) y el verde posterior tiene que poder mergear.
   if (run && isTerminal(run.state)) {
-    return NOTHING(`run en estado terminal ${run.state}`);
+    const lateSuccess = run.state === "parked" && event.type === "bugbot_verdict" && event.conclusion === "success";
+    if (!lateSuccess) {
+      return NOTHING(`run en estado terminal ${run.state}`);
+    }
   }
 
   switch (event.type) {
@@ -136,7 +140,7 @@ export function decide(run: Run | null, event: Event, maxAttempts: number): Deci
       // opinar antes de que procesáramos el synchronize, o un success llegó
       // tarde después de un veredicto incompleto. Descartarlo deja la run
       // colgada y el PR sin mergear.
-      if (run.state !== "in_review" && run.state !== "fixing") {
+      if (run.state !== "in_review" && run.state !== "fixing" && run.state !== "parked") {
         return NOTHING(`veredicto recibido en estado ${run.state}`);
       }
 

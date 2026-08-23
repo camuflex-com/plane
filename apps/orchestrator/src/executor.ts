@@ -6,10 +6,11 @@ import { GitHubClient, type PullRequest } from "@/clients/github";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
 import {
-  getActiveRunForIssue,
-  getActiveRunForPr,
   getEnabledProject,
   getProjectByRepo,
+  getActiveRunForIssue,
+  getActiveRunForPr,
+  getRunForBugbot,
   createRun,
   updateRun,
   type ProjectConfig,
@@ -53,10 +54,21 @@ export class Executor {
             body: string;
           }
         );
+      case "github.bugbot_check_success":
+        return this.onBugbotCheckSuccess(
+          job.payload as {
+            owner: string;
+            repo: string;
+            prNumber: number | null;
+            headSha: string | null;
+          }
+        );
       case "github.pr_synchronized":
         return this.onPrSynchronized(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
+      case "reconcile.bugbot":
+        return this.onReconcileBugbot(job.payload as { runId: number });
       default:
         logger.warn("tipo de trabajo desconocido", { kind: job.kind });
     }
@@ -129,15 +141,40 @@ export class Executor {
 
       case "merge_pr": {
         const pr = await this.github.getPullRequest(owner, repo, action.prNumber);
-        assertMergeable(pr);
-        await this.github.mergePullRequest(owner, repo, action.prNumber, pr.head.sha);
-        logger.info("PR mergeado", { runId: run.id, prNumber: action.prNumber });
+        if (pr.merged) {
+          logger.info("PR ya estaba mergeado", { runId: run.id, prNumber: action.prNumber });
+        } else {
+          assertMergeable(pr);
+          await this.github.mergePullRequest(owner, repo, action.prNumber, pr.head.sha);
+          logger.info("PR mergeado", { runId: run.id, prNumber: action.prNumber });
+        }
+        await this.deleteMergedBranch(owner, repo, pr.head.ref, config.baseBranch);
         return;
       }
 
       case "park":
         logger.warn("run aparcada", { runId: run.id, reason: action.reason });
         return;
+    }
+  }
+
+  /**
+   * Tras mergear a main la rama del agente ya no sirve. No se toca la rama
+   * base ni main/master aunque GitHub devolviera un ref raro.
+   */
+  private async deleteMergedBranch(owner: string, repo: string, branch: string, baseBranch: string): Promise<void> {
+    const protectedBranches = new Set(["main", "master", baseBranch, ""]);
+    if (protectedBranches.has(branch)) {
+      logger.warn("no se borra la rama base tras el merge", { owner, repo, branch });
+      return;
+    }
+    try {
+      await this.github.deleteBranch(owner, repo, branch);
+      logger.info("rama eliminada", { owner, repo, branch });
+    } catch (error) {
+      // El merge ya ocurrió: fallar aquí dejaría el job reintentando contra
+      // un PR cerrado y la issue sin pasar a Done.
+      logger.warn("no se pudo borrar la rama", { owner, repo, branch, error: String(error) });
     }
   }
 
@@ -231,7 +268,7 @@ export class Executor {
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
 
-    const run = await getActiveRunForPr(this.db, config.planeProjectId, payload.prNumber);
+    const run = await getRunForBugbot(this.db, config.planeProjectId, payload.prNumber, payload.headSha);
     if (!run?.prNumber) {
       logger.info("revisión de Bugbot sin run asociada", { prNumber: payload.prNumber });
       return;
@@ -241,7 +278,8 @@ export class Executor {
       await updateRun(this.db, run.id, { headSha: payload.headSha });
     }
 
-    const findings = await this.collectFindingsForReview(config, payload.prNumber, payload.reviewId);
+    const findings =
+      payload.reviewId > 0 ? await this.collectFindingsForReview(config, payload.prNumber, payload.reviewId) : [];
     const interpreted = interpretBugbotReview({
       state: payload.state,
       body: payload.body,
@@ -272,6 +310,99 @@ export class Executor {
     });
   }
 
+  /** Check de Bugbot en verde: no hay review de GitHub, pero sí "no encontró bugs". */
+  private async onBugbotCheckSuccess(payload: {
+    owner: string;
+    repo: string;
+    prNumber: number | null;
+    headSha: string | null;
+  }): Promise<void> {
+    const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
+    if (!config) return;
+
+    const run = await getRunForBugbot(this.db, config.planeProjectId, payload.prNumber, payload.headSha);
+    if (!run?.prNumber) {
+      logger.info("check de Bugbot en verde sin run asociada", {
+        prNumber: payload.prNumber,
+        headSha: payload.headSha,
+      });
+      return;
+    }
+
+    if (payload.headSha) {
+      await updateRun(this.db, run.id, { headSha: payload.headSha });
+    }
+
+    logger.info("veredicto de Bugbot", { prNumber: run.prNumber, kind: "success", source: "check" });
+    await this.apply(run, config, {
+      type: "bugbot_verdict",
+      prNumber: run.prNumber,
+      conclusion: "success",
+      findings: [],
+    });
+  }
+
+  /**
+   * Recupera un veredicto que el webhook se saltó (reinicio, evento anterior
+   * al deploy). Mira el check en verde y, si no hay permiso Checks, las reviews.
+   */
+  private async onReconcileBugbot(payload: { runId: number }): Promise<void> {
+    const res = await this.db.query(`SELECT * FROM runs WHERE id = $1`, [payload.runId]);
+    const row = res.rows[0];
+    if (!row || row.pr_number === null) return;
+    const config = await getEnabledProject(this.db, row.plane_project_id);
+    if (!config) return;
+
+    const prNumber = Number(row.pr_number);
+    const { githubOwner: owner, githubRepo: repo } = config;
+
+    try {
+      const pr = await this.github.getPullRequest(owner, repo, prNumber);
+      if (pr.merged) {
+        await this.apply(runFromRow(row), config, {
+          type: "bugbot_verdict",
+          prNumber,
+          conclusion: "success",
+          findings: [],
+        });
+        return;
+      }
+
+      try {
+        const checks = await this.github.listCheckRuns(owner, repo, pr.head.sha);
+        const bugbotGreen = checks.some(
+          (c) => isBugbotCheck(c.name) && c.status === "completed" && c.conclusion === "success"
+        );
+        if (bugbotGreen) {
+          logger.info("reconcile: Bugbot en verde", { runId: payload.runId, prNumber });
+          await this.onBugbotCheckSuccess({ owner, repo, prNumber, headSha: pr.head.sha });
+          return;
+        }
+      } catch (error) {
+        logger.info("reconcile: no se pudieron leer checks, se miran reviews", {
+          prNumber,
+          error: String(error),
+        });
+      }
+
+      const reviews = await this.github.listReviews(owner, repo, prNumber);
+      const latest = reviews.findLast((r) => isBugbot(r.user?.login));
+      if (!latest) return;
+
+      await this.onBugbotReview({
+        owner,
+        repo,
+        prNumber,
+        headSha: latest.commit_id ?? pr.head.sha,
+        reviewId: latest.id,
+        state: latest.state,
+        body: latest.body ?? "",
+      });
+    } catch (error) {
+      logger.warn("reconcile de Bugbot falló", { runId: payload.runId, error: String(error) });
+    }
+  }
+
   /** Comentarios en línea de esta revisión, no de las anteriores del mismo PR. */
   private async collectFindingsForReview(config: ProjectConfig, prNumber: number, reviewId: number): Promise<string[]> {
     const { githubOwner: owner, githubRepo: repo } = config;
@@ -295,17 +426,21 @@ export class Executor {
     const config = await getEnabledProject(this.db, row.plane_project_id);
     if (!config) return;
 
-    const run: Run = {
-      id: Number(row.id),
-      planeIssueId: row.plane_issue_id,
-      planeProjectId: row.plane_project_id,
-      cursorAgentId: row.cursor_agent_id ?? null,
-      prNumber: row.pr_number === null ? null : Number(row.pr_number),
-      state: row.state,
-      attempts: Number(row.attempts),
-    };
+    const run = runFromRow(row);
     await this.apply(run, config, { type: "agent_stale", minutes: payload.minutes });
   }
+}
+
+function runFromRow(row: Record<string, unknown>): Run {
+  return {
+    id: Number(row.id),
+    planeIssueId: row.plane_issue_id as string,
+    planeProjectId: row.plane_project_id as string,
+    cursorAgentId: (row.cursor_agent_id as string) ?? null,
+    prNumber: row.pr_number === null ? null : Number(row.pr_number),
+    state: row.state as Run["state"],
+    attempts: Number(row.attempts),
+  };
 }
 
 /**
@@ -330,6 +465,10 @@ export function assertMergeable(pr: PullRequest): void {
     );
   }
 }
+
+/** Check de CI de Bugbot (`Cursor Bugbot`). No se usa `/cursor/` a secas:
+ *  el agente publica checks propios que no son una revisión. */
+export const isBugbotCheck = (name: string | undefined) => /bugbot/i.test(name ?? "");
 
 /** Bugbot publica reviews como `cursor[bot]`. */
 export const isBugbot = (login: string | undefined) =>

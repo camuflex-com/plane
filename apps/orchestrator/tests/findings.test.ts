@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanFinding, interpretBugbotReview, isBugbot, parseFoundCount } from "@/executor";
+import { cleanFinding, interpretBugbotReview, isBugbot, isBugbotCheck, parseFoundCount } from "@/executor";
 
 // Cuerpos reales tomados del PR #3 de camuflex-backend.
 const REAL_INLINE = `### Log injection via driver identity
@@ -23,6 +23,18 @@ describe("autoría de Bugbot", () => {
     expect(isBugbot("github-actions[bot]")).toBe(false);
     expect(isBugbot("FrijolEnjoyer")).toBe(false);
     expect(isBugbot(undefined)).toBe(false);
+  });
+});
+
+describe("check de CI de Bugbot", () => {
+  it("acepta Cursor Bugbot", () => {
+    expect(isBugbotCheck("Cursor Bugbot")).toBe(true);
+    expect(isBugbotCheck("Bugbot")).toBe(true);
+  });
+
+  it("no trata los checks del agente como revisión", () => {
+    expect(isBugbotCheck("Cursor")).toBe(false);
+    expect(isBugbotCheck("Cursor Agent")).toBe(false);
   });
 });
 

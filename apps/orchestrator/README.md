@@ -11,9 +11,10 @@ orchestrator ── POST /v1/agents (autoCreatePR) ──► Cursor Cloud Agent
    │  webhook: pull_request.opened  ◄─── PR en GitHub ◄──┘
    │      → issue a In Review, comenta "bugbot run"
    │
-   │  webhook: pull_request_review.submitted (Bugbot)
-   │      APPROVED / 0 issues → merge → issue a Done
-   │      comentarios / N issues → issue a In Progress + follow-up al agente
+   │  webhook: check_run.completed success (Bugbot, sin hallazgos)
+   │      → merge → issue a Done
+   │  webhook: pull_request_review.submitted (Bugbot, con comentarios)
+   │      → issue a In Progress + follow-up al agente
    └───────────────────────────────────────────────────────┘
 ```
 
@@ -98,7 +99,7 @@ El estado se verifica además en el servidor contra el payload, no solo por
 configuración: si alguien añadiera otro estado al disparador, el orquestador
 lo rechaza en vez de lanzar un agente sobre una issue que no toca.
 
-En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request` y **`pull_request_review`**. El check de CI de Bugbot no se usa: completa minutos antes de que existan los comentarios, y un `neutral` no significa que haya bugs.
+En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`.
 
 ### Permisos del `GITHUB_TOKEN`
 
@@ -128,22 +129,19 @@ El **merge** es otra cosa: lo hace el orquestador con `GITHUB_TOKEN`, así que
 el merge sí queda a nombre del dueño de ese token. Para que tampoco sea una
 persona haría falta una GitHub App propia en vez de un PAT.
 
-### El veredicto es la revisión, no el check
+### Cómo se decide el veredicto de Bugbot
 
-El `check_run` de Bugbot completa **antes** de que existan comentarios —a
-veces seis minutos antes— y casi siempre llega como `neutral`. Tratarlo como
-veredicto aparcaba la run (o la mandaba a corregir con comentarios viejos)
-antes de que Bugbot hablara.
+Bugbot hace dos cosas distintas, y no al mismo tiempo:
 
-El orquestador **ignora los checks** y espera el evento `pull_request_review`
-de `cursor[bot]`:
+- **Si no hay bugs:** pone el check `Cursor Bugbot` en verde. **No** envía
+  `pull_request_review`. El orquestador trata `check_run.completed` +
+  `conclusion=success` como merge.
+- **Si hay bugs:** publica una review con comentarios (minutos después de un
+  `neutral` en el check). El `neutral` se ignora. El
+  `pull_request_review.submitted` es el que manda a In Progress con las notas.
 
-- **APPROVED**, o el resumen dice `found 0 potential issues` → merge a main
-  e issue a Done.
-- **Comentarios en línea**, `CHANGES_REQUESTED`, o `found N>0` → issue a In
-  Progress con esas notas y follow-up al mismo agente.
-- Cualquier otra cosa se ignora: no hay límite de espera, el siguiente evento
-  de revisión es el que cuenta.
+Si el proceso se reinicia y el webhook ya pasó, el reconciler mira el PR al
+arrancar: check en verde → merge; review con hallazgos → corrección.
 
 Los hallazgos se leen de **esa** revisión, no de todo el PR, para no reutilizar
 comentarios de un intento anterior.
@@ -156,8 +154,9 @@ devuelve la run a `in_review` y vuelve a pedir Bugbot.
 - **El merge es automático.** Se exige Bugbot en verde y que el PR esté en
   `mergeable_state: clean` —sin conflictos y con los checks requeridos en
   verde—, y se manda el `sha` revisado para que GitHub lo rechace si alguien
-  empujó algo después. Aun así, Bugbot en verde no significa que el cambio sea
-  correcto.
+  empujó algo después. Tras mergear se borra la rama del PR (`cursor/…`)
+  para no dejar refs huérfanos; no se toca `main`. Aun así, Bugbot en verde
+  no significa que el cambio sea correcto.
 - **`max_attempts` frena los rebotes.** Agotados los intentos la run se aparca y comenta en la issue. Sin ese tope, un bug que el agente no sepa arreglar daría vueltas quemando dinero.
 - **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual.
 - `project_config` se edita por SQL; no hay interfaz.

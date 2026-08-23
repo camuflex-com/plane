@@ -59,7 +59,7 @@ describe("prevención de bucles", () => {
     expect(kinds(d)).toEqual(["start_agent"]);
   });
 
-  it.each<RunState>(["merged", "parked", "failed"])("una run en %s no reacciona a nada", (state) => {
+  it.each<RunState>(["merged", "failed"])("una run en %s no reacciona a nada", (state) => {
     const events: Event[] = [
       { type: "issue_entered_in_progress", issueId: "i", projectId: "p" },
       { type: "pr_opened", prNumber: 9, headSha: "abc", agentId: "agent_1" },
@@ -70,6 +70,15 @@ describe("prevención de bucles", () => {
       expect(d.actions).toHaveLength(0);
       expect(d.nextState).toBeNull();
     }
+  });
+
+  it("una run parked ignora arranques y PRs", () => {
+    const d = decide(
+      run({ state: "parked" }),
+      { type: "issue_entered_in_progress", issueId: "i", projectId: "p" },
+      MAX
+    );
+    expect(d.actions).toHaveLength(0);
   });
 });
 
@@ -104,6 +113,16 @@ describe("veredicto de Bugbot", () => {
   it("en verde también mergea si el agente todavía está corrigiendo", () => {
     const d = decide(
       run({ state: "fixing" }),
+      { type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] },
+      MAX
+    );
+    expect(d.nextState).toBe("merged");
+    expect(kinds(d)).toEqual(["merge_pr", "move_issue"]);
+  });
+
+  it("en verde mergea aunque la run se hubiera aparcado antes", () => {
+    const d = decide(
+      run({ state: "parked" }),
       { type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] },
       MAX
     );
