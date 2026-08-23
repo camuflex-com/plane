@@ -1,4 +1,5 @@
 import express, { Router, type Express } from "express";
+import { createApiRouter } from "@/api";
 import { claimDelivery, type Db } from "@/db";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
@@ -87,6 +88,10 @@ export function createServer(db: Db, env: Env): Express {
       logger.error("fallo procesando webhook de GitHub", { error: String(error) });
     });
   });
+
+  // El API de lectura va bajo el mismo prefijo, con su propio parseo de JSON:
+  // los webhooks necesitan el cuerpo crudo para la firma, estas rutas no.
+  routes.use("/api", createApiRouter(db, env));
 
   app.use(BASE_PATH, routes);
 

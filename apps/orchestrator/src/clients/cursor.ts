@@ -95,6 +95,14 @@ export class CursorClient {
     });
   }
 
+  /** Estado y texto final de un run: es el "razonamiento" que se muestra. */
+  async getRun(agentId: string, runId: string): Promise<{ status?: string; result?: string; durationMs?: number }> {
+    return requestJson(`${this.env.CURSOR_BASE_URL}/v1/agents/${agentId}/runs/${runId}`, {
+      headers: this.headers,
+      retries: 1,
+    });
+  }
+
   async getAgent(agentId: string): Promise<AgentDetail> {
     return requestJson<AgentDetail>(`${this.env.CURSOR_BASE_URL}/v1/agents/${agentId}`, {
       headers: this.headers,

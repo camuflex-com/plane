@@ -11,6 +11,7 @@ import { useParams, usePathname } from "next/navigation";
 import { EUserPermissionsLevel, EUserPermissions } from "@plane/constants";
 import { useTranslation } from "@plane/i18n";
 import { CycleIcon, IntakeIcon, ModuleIcon, PageIcon, ViewsIcon, WorkItemsIcon } from "@plane/propel/icons";
+import { Bot } from "lucide-react";
 import type { EUserProjectRoles } from "@plane/types";
 // plane ui
 // components
@@ -129,6 +130,20 @@ export const ProjectNavigation = observer(function ProjectNavigation(props: TPro
         access: [EUserPermissions.ADMIN, EUserPermissions.MEMBER, EUserPermissions.GUEST],
         shouldRender: project?.inbox_view ?? false,
         sortOrder: 6,
+      },
+      {
+        // Añadido por este fork: estado de las tareas encoladas al
+        // orquestador. Siempre visible para admins y miembros — la propia
+        // página avisa si el proyecto no tiene automatización habilitada, y
+        // esconderla dejaría sin forma de saber por qué no pasa nada.
+        i18n_key: "sidebar.automation",
+        key: "automation",
+        name: "Automation",
+        href: `/${workspaceSlug}/projects/${projectId}/automation`,
+        icon: Bot,
+        access: [EUserPermissions.ADMIN, EUserPermissions.MEMBER],
+        shouldRender: true,
+        sortOrder: 7,
       },
     ],
     [project]

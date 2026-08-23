@@ -208,6 +208,10 @@ export const coreRoutes: RouteConfigEntry[] = [
               ":workspaceSlug/projects/:projectId/pages",
               "./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/pages/(list)/page.tsx"
             ),
+            route(
+              ":workspaceSlug/projects/:projectId/automation",
+              "./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/automation/page.tsx"
+            ),
           ]),
           // Intake list
           layout("./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/intake/layout.tsx", [
