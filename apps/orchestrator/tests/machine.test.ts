@@ -101,6 +101,16 @@ describe("veredicto de Bugbot", () => {
     expect(kinds(d)).toEqual(["merge_pr", "move_issue"]);
   });
 
+  it("en verde también mergea si el agente todavía está corrigiendo", () => {
+    const d = decide(
+      run({ state: "fixing" }),
+      { type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] },
+      MAX
+    );
+    expect(d.nextState).toBe("merged");
+    expect(kinds(d)).toEqual(["merge_pr", "move_issue"]);
+  });
+
   it("con hallazgos: devuelve a In Progress y reenvía al agente", () => {
     const d = decide(
       run({ state: "in_review", attempts: 0 }),
@@ -143,13 +153,44 @@ describe("veredicto de Bugbot", () => {
     }
   });
 
-  it("un veredicto fuera de in_review no hace nada", () => {
+  it("un veredicto fuera de in_review/fixing no hace nada", () => {
     const d = decide(
       run({ state: "agent_running" }),
       { type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] },
       MAX
     );
     expect(d.actions).toHaveLength(0);
+  });
+
+  it("con hallazgos mientras corrige: vuelve a mandar el follow-up", () => {
+    const d = decide(
+      run({ state: "fixing", attempts: 1 }),
+      { type: "bugbot_verdict", prNumber: 7, conclusion: "neutral", findings: ["sigue el null"] },
+      MAX
+    );
+    expect(d.nextState).toBe("fixing");
+    expect(kinds(d)).toEqual(["move_issue", "comment_issue", "send_followup"]);
+  });
+});
+
+describe("PR actualizado tras una corrección", () => {
+  it("desde fixing vuelve a in_review y pide Bugbot otra vez", () => {
+    const d = decide(run({ state: "fixing" }), { type: "pr_synchronized", prNumber: 7, headSha: "s2" }, MAX);
+    expect(d.nextState).toBe("in_review");
+    expect(kinds(d)).toEqual(["move_issue", "request_bugbot"]);
+  });
+
+  it("un sync en in_review no dispara otro ciclo", () => {
+    const d = decide(run({ state: "in_review" }), { type: "pr_synchronized", prNumber: 7, headSha: "s2" }, MAX);
+    expect(d.nextState).toBeNull();
+    expect(d.actions).toHaveLength(0);
+    expect(d.ignoredBecause).toBeUndefined();
+  });
+
+  it("ignora un sync fuera de fixing/in_review", () => {
+    const d = decide(run({ state: "agent_running" }), { type: "pr_synchronized", prNumber: 7, headSha: "s2" }, MAX);
+    expect(d.actions).toHaveLength(0);
+    expect(d.ignoredBecause).toBeTruthy();
   });
 });
 
@@ -190,5 +231,27 @@ describe("recorrido completo", () => {
     step({ type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] });
     expect(state).toBe("merged");
     expect(isTerminal(state)).toBe(true);
+  });
+
+  it("corrección en el mismo PR: follow-up, push, Bugbot en verde, merge", () => {
+    let state: RunState = "agent_running";
+    let attempts = 0;
+    const step = (event: Parameters<typeof decide>[1]) => {
+      const d = decide(run({ state, attempts }), event, MAX);
+      if (d.nextState) state = d.nextState;
+      if (d.incrementAttempts) attempts += 1;
+      return d;
+    };
+
+    step({ type: "pr_opened", prNumber: 7, headSha: "s", agentId: "a" });
+    step({ type: "bugbot_verdict", prNumber: 7, conclusion: "neutral", findings: ["x"] });
+    expect(state).toBe("fixing");
+
+    const afterPush = step({ type: "pr_synchronized", prNumber: 7, headSha: "s2" });
+    expect(state).toBe("in_review");
+    expect(kinds(afterPush)).toEqual(["move_issue", "request_bugbot"]);
+
+    step({ type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] });
+    expect(state).toBe("merged");
   });
 });

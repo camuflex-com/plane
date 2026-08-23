@@ -2,6 +2,7 @@ import express, { Router, type Express } from "express";
 import { createApiRouter } from "@/api";
 import { claimDelivery, type Db } from "@/db";
 import type { Env } from "@/env";
+import { isBugbotCheck } from "@/executor";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
 import { verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
@@ -173,11 +174,15 @@ async function ingestPlane(db: Db, env: Env, deliveryId: string, payload: PlaneP
  * transición posterior nunca llega, dejando la run colgada para siempre.
  */
 const PR_READY_ACTIONS = new Set(["opened", "ready_for_review"]);
+const PR_SYNC_ACTIONS = new Set(["synchronize"]);
 
 function isActionableGitHubEvent(eventName: string, payload: GitHubPayload): boolean {
-  if (eventName === "pull_request") return PR_READY_ACTIONS.has(payload.action ?? "");
+  if (eventName === "pull_request") {
+    const action = payload.action ?? "";
+    return PR_READY_ACTIONS.has(action) || PR_SYNC_ACTIONS.has(action);
+  }
   if (eventName === "check_run") {
-    return payload.action === "completed" && /bugbot|cursor/i.test(payload.check_run?.name ?? "");
+    return payload.action === "completed" && isBugbotCheck(payload.check_run?.name);
   }
   return false;
 }
@@ -205,13 +210,19 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
       logger.info("PR en borrador, se espera a que esté listo", { owner, repo, prNumber: pr.number });
       return;
     }
-    await enqueue(db, "github.pr_opened", {
+    const job = {
       owner,
       repo,
       prNumber: pr.number,
       headSha: pr.head.sha,
       branch: pr.head.ref ?? "",
-    });
+    };
+    if (PR_SYNC_ACTIONS.has(payload.action ?? "")) {
+      await enqueue(db, "github.pr_synchronized", job);
+      logger.info("PR actualizado, se encola el sync", { owner, repo, prNumber: pr.number });
+      return;
+    }
+    await enqueue(db, "github.pr_opened", job);
     logger.info("PR encolado", { owner, repo, prNumber: pr.number, action: payload.action });
     return;
   }

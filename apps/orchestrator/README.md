@@ -138,8 +138,18 @@ las guardas de estado.
 
 Por eso, cuando el veredicto trae hallazgos, el orquestador **no actúa hasta
 tener el detalle**: reencola el trabajo cada 30 s (hasta 12 veces, 6 minutos)
-mientras la revisión no exista. Con veredicto limpio no espera, porque no hay
-nada que recoger.
+mientras la revisión no exista. Si se agota la espera **no aplica el
+veredicto**: la run se queda en `in_review` para que un check posterior (a
+menudo el `success` real) sí se procese. Aplicar un `neutral` vacío sacaba la
+run a `fixing` y el verde llegaba tarde, descartado por las guardas de estado.
+
+Tampoco se tratan como veredicto los checks cuyo nombre contiene "Cursor" pero
+no "Bugbot": el agente publica los suyos y un `neutral` de esos era el que
+disparaba el ciclo roto.
+
+Tras una corrección, el agente empuja al mismo PR (`synchronize`). Eso
+devuelve la run a `in_review`, vuelve a pedir Bugbot, y un `success` mergea
+aunque llegue todavía en `fixing`.
 
 ## Límites conocidos
 

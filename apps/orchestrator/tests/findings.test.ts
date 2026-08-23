@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanFinding, isBugbot } from "@/executor";
+import { cleanFinding, isBugbot, isBugbotCheck } from "@/executor";
 
 // Cuerpos reales tomados del PR #3 de camuflex-backend.
 const REAL_INLINE = `### Log injection via driver identity
@@ -15,14 +15,31 @@ Cursor Bugbot has reviewed your changes using high effort and found 2 potential 
 describe("autoría de Bugbot", () => {
   it("reconoce cursor[bot]", () => {
     expect(isBugbot("cursor[bot]")).toBe(true);
-    expect(isBugbot("Cursor")).toBe(true);
     expect(isBugbot("bugbot")).toBe(true);
+    expect(isBugbot("bugbot[bot]")).toBe(true);
   });
 
   it("no confunde a otros bots", () => {
     expect(isBugbot("github-actions[bot]")).toBe(false);
     expect(isBugbot("FrijolEnjoyer")).toBe(false);
     expect(isBugbot(undefined)).toBe(false);
+  });
+});
+
+describe("check de CI de Bugbot", () => {
+  it("acepta el check de Bugbot", () => {
+    expect(isBugbotCheck("Bugbot")).toBe(true);
+    expect(isBugbotCheck("Cursor Bugbot")).toBe(true);
+  });
+
+  // El agente de Cursor publica checks cuyo nombre contiene "Cursor". Si se
+  // tratan como veredicto, un `neutral` prematuro saca la run de in_review y
+  // el success real de Bugbot se descarta.
+  it("no trata los checks del agente de Cursor como revisión", () => {
+    expect(isBugbotCheck("Cursor")).toBe(false);
+    expect(isBugbotCheck("Cursor Agent")).toBe(false);
+    expect(isBugbotCheck("github-actions")).toBe(false);
+    expect(isBugbotCheck(undefined)).toBe(false);
   });
 });
 

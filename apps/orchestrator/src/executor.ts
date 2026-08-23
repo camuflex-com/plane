@@ -17,7 +17,7 @@ import {
 } from "@/db/queries";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
-import { decide, type Action, type Event, type Run } from "@/machine";
+import { decide, type Action, type BugbotConclusion, type Event, type Run } from "@/machine";
 import { enqueue, type Job } from "@/queue";
 
 /** Cuánto esperar a que Bugbot publique su revisión, y cuántas veces. */
@@ -54,8 +54,11 @@ export class Executor {
             prNumber: number | null;
             headSha: string | null;
             conclusion: string;
+            deferAttempt?: number;
           }
         );
+      case "github.pr_synchronized":
+        return this.onPrSynchronized(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
       default:
@@ -197,6 +200,29 @@ export class Executor {
     });
   }
 
+  private async onPrSynchronized(payload: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headSha: string;
+  }): Promise<void> {
+    const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
+    if (!config) return;
+
+    const run = await getActiveRunForPr(this.db, config.planeProjectId, payload.prNumber);
+    if (!run) {
+      logger.info("sync sin run asociada", { prNumber: payload.prNumber });
+      return;
+    }
+
+    await updateRun(this.db, run.id, { headSha: payload.headSha });
+    await this.apply(run, config, {
+      type: "pr_synchronized",
+      prNumber: payload.prNumber,
+      headSha: payload.headSha,
+    });
+  }
+
   private async onCheckCompleted(payload: {
     owner: string;
     repo: string;
@@ -220,22 +246,25 @@ export class Executor {
       return;
     }
 
-    // Con veredicto limpio no hace falta esperar a nada: no hay detalle que
-    // recoger.
-    if (payload.conclusion === "success") {
+    if (payload.headSha) {
+      await updateRun(this.db, run.id, { headSha: payload.headSha });
+    }
+
+    // Con veredicto limpio (o abortado) no hay detalle que recoger.
+    if (payload.conclusion === "success" || payload.conclusion === "cancelled" || payload.conclusion === "timed_out") {
       await this.apply(run, config, {
         type: "bugbot_verdict",
         prNumber: run.prNumber,
-        conclusion: "success",
+        conclusion: payload.conclusion,
         findings: [],
       });
       return;
     }
 
-    // Con hallazgos sí: el check de Bugbot puede completar MINUTOS antes de
-    // que publique su revisión. Actuar con el primero produce un "sin detalle"
-    // inútil y, peor, deja la run fuera de `in_review`, de modo que el
-    // veredicto de verdad llega tarde y se descarta.
+    // `neutral`/`failure` significan hallazgos, pero el check de Bugbot puede
+    // completar MINUTOS antes de que publique su revisión. Actuar sin el
+    // detalle saca la run de `in_review` y el veredicto de verdad (a menudo un
+    // `success` posterior) llega tarde y se descarta.
     const findings = await this.collectFindings(config, run.prNumber);
     if (findings.length === 0) {
       const attempt = Number(deferAttempt) + 1;
@@ -244,13 +273,18 @@ export class Executor {
         await enqueue(this.db, "github.check_completed", { ...payload, deferAttempt: attempt }, VERDICT_DEFER_MS);
         return;
       }
-      logger.warn("se agotó la espera de la revisión; se sigue sin detalle", { prNumber: run.prNumber });
+      // No se aplica. Quedarse en `in_review` (o `fixing`) permite que un
+      // check posterior —el veredicto real— sí se procese.
+      logger.warn("se agotó la espera de la revisión; se sigue esperando el veredicto", {
+        prNumber: run.prNumber,
+      });
+      return;
     }
 
     await this.apply(run, config, {
       type: "bugbot_verdict",
       prNumber: run.prNumber,
-      conclusion: payload.conclusion as never,
+      conclusion: payload.conclusion as BugbotConclusion,
       findings,
     });
   }
@@ -273,8 +307,8 @@ export class Executor {
       const summary = reviews.findLast((r) => isBugbot(r.user?.login) && r.body?.trim());
       return summary ? [cleanFinding(summary.body)] : [];
     } catch (error) {
-      // Quedarse sin el detalle no debe bloquear el ciclo: se devuelve la
-      // issue igualmente y el agente puede releer el PR.
+      // Un fallo al leer no debe inventar un veredicto: se pospone y se
+      // espera al siguiente check (o a que la revisión exista).
       logger.warn("no se pudieron leer los comentarios de la revisión", { prNumber, error: String(error) });
       return [];
     }
@@ -323,8 +357,14 @@ export function assertMergeable(pr: PullRequest): void {
   }
 }
 
-/** Bugbot publica como `cursor[bot]`. */
-export const isBugbot = (login: string | undefined) => /bugbot|cursor/i.test(login ?? "");
+/** Check de CI de Bugbot. No se usa `/cursor/`: el agente publica checks
+ *  propios cuyo nombre contiene "Cursor" y no son una revisión. Tratarlos
+ *  como veredicto saca la run de `in_review` y el veredicto real se descarta. */
+export const isBugbotCheck = (name: string | undefined) => /bugbot/i.test(name ?? "");
+
+/** Bugbot publica reviews como `cursor[bot]`. */
+export const isBugbot = (login: string | undefined) =>
+  /bugbot/i.test(login ?? "") || /^cursor\[bot\]$/i.test(login ?? "");
 
 /** Quita el marcado de Bugbot y deja una línea legible. */
 export function cleanFinding(body: string): string {

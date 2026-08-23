@@ -28,6 +28,8 @@ export type Event =
   | { type: "issue_entered_in_progress"; issueId: string; projectId: string }
   /** El agente abrió su PR. */
   | { type: "pr_opened"; prNumber: number; headSha: string; agentId: string | null }
+  /** El agente empujó commits nuevos al mismo PR (tras una corrección). */
+  | { type: "pr_synchronized"; prNumber: number; headSha: string }
   /** Bugbot publicó su veredicto sobre el PR. */
   | { type: "bugbot_verdict"; prNumber: number; conclusion: BugbotConclusion; findings: string[] }
   /** El barrido periódico encontró una run atascada. */
@@ -107,9 +109,33 @@ export function decide(run: Run | null, event: Event, maxAttempts: number): Deci
       };
     }
 
+    case "pr_synchronized": {
+      if (!run) return NOTHING("sync sin run asociada");
+      // Un push mientras ya estamos en revisión no cambia el ciclo: Bugbot
+      // re-corre o ya está pedido. Solo hay que rearmar cuando veníamos de
+      // corregir, para volver a aceptar el veredicto.
+      if (run.state === "in_review") {
+        return { nextState: null, actions: [] };
+      }
+      if (run.state !== "fixing") {
+        return NOTHING(`sync recibido en estado ${run.state}`);
+      }
+      return {
+        nextState: "in_review",
+        actions: [
+          { type: "move_issue", issueId: run.planeIssueId, to: "in_review" },
+          { type: "request_bugbot", prNumber: event.prNumber },
+        ],
+      };
+    }
+
     case "bugbot_verdict": {
       if (!run) return NOTHING("veredicto sin run asociada");
-      if (run.state !== "in_review") {
+      // `fixing` también: el agente ya empujó la corrección y Bugbot volvió a
+      // opinar antes de que procesáramos el synchronize, o un success llegó
+      // tarde después de un veredicto incompleto. Descartarlo deja la run
+      // colgada y el PR sin mergear.
+      if (run.state !== "in_review" && run.state !== "fixing") {
         return NOTHING(`veredicto recibido en estado ${run.state}`);
       }
 
