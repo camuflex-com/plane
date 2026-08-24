@@ -162,7 +162,7 @@
           },
           "website": {
             "label": "URL webové stránky",
-            "placeholder": "https://plane.so",
+            "placeholder": "https://camuflex.com",
             "validation": {
               "invalid": "Neplatná URL",
               "maxLength": "URL by měla být kratší než 800 znaků"
@@ -178,7 +178,7 @@
           },
           "contact_email": {
             "label": "Email podpory",
-            "placeholder": "help@plane.so",
+            "placeholder": "help@camuflex.com",
             "validation": {
               "invalid": "Neplatná emailová adresa",
               "maxLength": "Email podpory by měl být kratší než 255 znaků"

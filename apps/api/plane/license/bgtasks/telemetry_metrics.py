@@ -81,9 +81,11 @@ def _collect_and_push_metrics() -> None:
         logger.debug("Telemetry disabled, skipping metrics push")
         return
 
-    # Configure OTEL metrics (gRPC default, or HTTP if OTLP_METRICS_PROTOCOL=http)
     protocol = (os.environ.get("OTLP_METRICS_PROTOCOL") or "grpc").strip().lower()
     export_endpoint = get_otlp_grpc_endpoint() if protocol == "grpc" else get_otlp_http_metrics_url()
+    if not export_endpoint:
+        logger.debug("No OTLP endpoint configured, skipping metrics push")
+        return
 
     service_name = os.environ.get("SERVICE_NAME", "plane-ce-api")
 

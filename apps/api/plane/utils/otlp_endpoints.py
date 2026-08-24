@@ -5,8 +5,7 @@
 """
 Shared OTLP endpoint helpers so metrics and traces use the same collector
 when both are enabled. One URL (OTLP_ENDPOINT) is enough: same as traces
-(e.g. https://telemetry.plane.so or https://telemetry.plane.town behind
-nginx ingress with gRPC backend).
+(e.g. https://collector.example.com behind nginx ingress with gRPC backend).
 """
 
 import os
@@ -16,24 +15,27 @@ from urllib.parse import urlparse
 OTLP_GRPC_DEFAULT_PORT = "4317"
 HTTPS_DEFAULT_PORT = "443"
 
-_DEFAULT_OTLP_ENDPOINT = "https://telemetry.plane.so"
+_DEFAULT_OTLP_ENDPOINT = ""
 
 
 def grpc_endpoint_from_url(url: str) -> str:
     """
     Derive gRPC host:port from OTLP_ENDPOINT URL.
-    - https://telemetry.plane.so -> telemetry.plane.so:443 (nginx ingress)
-    - https://telemetry.plane.town -> telemetry.plane.town:443 (dev)
-    - telemetry.plane.so:4317 -> telemetry.plane.so:4317 (scheme-less with port)
-    - telemetry.plane.so -> telemetry.plane.so:4317 (scheme-less, default gRPC port)
+    - https://collector.example.com -> collector.example.com:443 (nginx ingress)
+    - collector.example.com:4317 -> collector.example.com:4317 (scheme-less with port)
+    - collector.example.com -> collector.example.com:4317 (scheme-less, default gRPC port)
     - Explicit port in URL is always preserved.
     """
+    if not url:
+        return ""
     # urlparse needs a scheme to correctly populate hostname/netloc.
     # Scheme-less values like "host:port" are misread as scheme="host", path="port".
     if "://" not in url:
         url = "//" + url
     parsed = urlparse(url)
-    host = parsed.hostname or "telemetry.plane.so"
+    host = parsed.hostname or ""
+    if not host:
+        return ""
     if parsed.port is not None:
         port = str(parsed.port)
     elif parsed.scheme == "https":
@@ -47,13 +49,17 @@ def get_otlp_grpc_endpoint() -> str:
     """
     Return the gRPC endpoint (host:port) for OTLP traces and metrics.
     Derived from OTLP_ENDPOINT so the same URL works for both (e.g. collector
-    behind nginx ingress with gRPC backend on 443).
+    behind nginx ingress with gRPC backend on 443). Empty when unset.
     """
     base = os.environ.get("OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
+    if not base:
+        return ""
     return grpc_endpoint_from_url(base)
 
 
 def get_otlp_http_metrics_url() -> str:
     """Return the HTTP URL for OTLP metrics (OTLP_ENDPOINT + /v1/metrics)."""
     base = os.environ.get("OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
+    if not base:
+        return ""
     return f"{base.rstrip('/')}/v1/metrics"

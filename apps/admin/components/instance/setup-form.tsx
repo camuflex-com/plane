@@ -54,7 +54,7 @@ const defaultFromData: TFormData = {
   email: "",
   company_name: "",
   password: "",
-  is_telemetry_enabled: true,
+  is_telemetry_enabled: false,
 };
 
 export function InstanceSetupForm() {
@@ -64,7 +64,7 @@ export function InstanceSetupForm() {
   const lastNameParam = searchParams?.get("last_name") || undefined;
   const companyParam = searchParams?.get("company") || undefined;
   const emailParam = searchParams?.get("email") || undefined;
-  const isTelemetryEnabledParam = (searchParams?.get("is_telemetry_enabled") === "True" ? true : false) || true;
+  const isTelemetryEnabledParam = searchParams?.get("is_telemetry_enabled") === "True";
   const errorCode = searchParams?.get("error_code") || undefined;
   const errorMessage = searchParams?.get("error_message") || undefined;
   // state
@@ -352,15 +352,7 @@ export function InstanceSetupForm() {
                 />
               </div>
               <label className="cursor-pointer text-13 font-medium text-tertiary" htmlFor="is_telemetry_enabled">
-                Allow Plane to anonymously collect usage events.{" "}
-                <a
-                  href="https://developers.plane.so/self-hosting/telemetry"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-500 hover:text-blue-600 flex-shrink-0 text-13 font-medium"
-                >
-                  See More
-                </a>
+                Allow Plane to anonymously collect usage events.
               </label>
             </div>
 

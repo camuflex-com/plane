@@ -162,7 +162,7 @@
           },
           "website": {
             "label": "URL du site web",
-            "placeholder": "https://plane.so",
+            "placeholder": "https://camuflex.com",
             "validation": {
               "invalid": "URL invalide",
               "maxLength": "L’URL doit comporter moins de 800 caractères"
@@ -178,7 +178,7 @@
           },
           "contact_email": {
             "label": "Adresse email du support",
-            "placeholder": "help@plane.so",
+            "placeholder": "help@camuflex.com",
             "validation": {
               "invalid": "Adresse email invalide",
               "maxLength": "L'adresse email du support doit comporter moins de 255 caractères"

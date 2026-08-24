@@ -162,7 +162,7 @@
           },
           "website": {
             "label": "WebサイトのURL",
-            "placeholder": "https://plane.so",
+            "placeholder": "https://camuflex.com",
             "validation": {
               "invalid": "無効なURL",
               "maxLength": "URLは800文字未満にしてください"
@@ -178,7 +178,7 @@
           },
           "contact_email": {
             "label": "サポートメールアドレス",
-            "placeholder": "help@plane.so",
+            "placeholder": "help@camuflex.com",
             "validation": {
               "invalid": "無効なメールアドレス",
               "maxLength": "サポートメールアドレスは255文字未満にしてください"

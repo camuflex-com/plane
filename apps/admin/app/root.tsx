@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import { Links, Meta, Outlet, Scripts } from "react-router";
 import type { LinksFunction } from "react-router";
+import { SITE_DESCRIPTION, SITE_KEYWORDS, SITE_NAME, SITE_URL } from "@plane/constants";
 import appleTouchIcon from "@/app/assets/favicon/apple-touch-icon.png?url";
 import favicon16 from "@/app/assets/favicon/favicon-16x16.png?url";
 import favicon32 from "@/app/assets/favicon/favicon-32x32.png?url";
@@ -21,9 +22,17 @@ import interVariableWoff2 from "@fontsource-variable/inter/files/inter-latin-wgh
 import "@fontsource/material-symbols-rounded";
 import "@fontsource/ibm-plex-mono";
 
-const APP_TITLE = "Plane | Simple, extensible, open-source project management tool.";
-const APP_DESCRIPTION =
-  "Open-source project management tool to manage work items, sprints, and product roadmaps with peace of mind.";
+export const meta: Route.MetaFunction = () => [
+  { title: SITE_NAME },
+  { name: "description", content: SITE_DESCRIPTION },
+  { property: "og:title", content: SITE_NAME },
+  { property: "og:description", content: SITE_DESCRIPTION },
+  { property: "og:url", content: SITE_URL },
+  {
+    name: "keywords",
+    content: SITE_KEYWORDS,
+  },
+];
 
 export const links: LinksFunction = () => [
   { rel: "apple-touch-icon", sizes: "180x180", href: appleTouchIcon },
@@ -57,20 +66,6 @@ export function Layout({ children }: { children: ReactNode }) {
     </html>
   );
 }
-
-export const meta: Route.MetaFunction = () => [
-  { title: APP_TITLE },
-  { name: "description", content: APP_DESCRIPTION },
-  { property: "og:title", content: APP_TITLE },
-  { property: "og:description", content: APP_DESCRIPTION },
-  { property: "og:url", content: "https://plane.so/" },
-  {
-    name: "keywords",
-    content:
-      "software development, customer feedback, software, accelerate, code management, release management, project management, work items tracking, agile, scrum, kanban, collaboration",
-  },
-  { name: "twitter:site", content: "@planepowers" },
-];
 
 export default function Root() {
   return (

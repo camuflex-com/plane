@@ -162,7 +162,7 @@
           },
           "website": {
             "label": "URL trang web",
-            "placeholder": "https://plane.so",
+            "placeholder": "https://camuflex.com",
             "validation": {
               "invalid": "URL không hợp lệ",
               "maxLength": "URL không nên vượt quá 800 ký tự"
@@ -178,7 +178,7 @@
           },
           "contact_email": {
             "label": "Email hỗ trợ",
-            "placeholder": "help@plane.so",
+            "placeholder": "help@camuflex.com",
             "validation": {
               "invalid": "Địa chỉ email không hợp lệ",
               "maxLength": "Email hỗ trợ không nên vượt quá 255 ký tự"
