@@ -23,7 +23,13 @@ const schema = z.object({
   // Cursor
   CURSOR_API_KEY: z.string().min(1),
   CURSOR_BASE_URL: z.string().url().default("https://api.cursor.com"),
-  CURSOR_MODEL: z.string().optional(),
+  /** Modelo que implementa las issues. */
+  CURSOR_MODEL: z.string().min(1).default("grok-4.6"),
+  /**
+   * Parámetros del modelo, en formato `clave=valor` separado por comas.
+   * Grok 4.6: `effort` (low|medium|high|xhigh) y `fast` (true|false).
+   */
+  CURSOR_MODEL_PARAMS: z.string().min(1).default("effort=high,fast=true"),
 
   // GitHub
   GITHUB_TOKEN: z.string().min(1),

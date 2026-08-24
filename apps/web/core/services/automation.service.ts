@@ -33,6 +33,19 @@ export type TAutomationRunDetail = TAutomationRun & {
   agent: { status?: string; result?: string; durationMs?: number } | null;
 };
 
+export type TCursorModelOption = {
+  id: string;
+  params: string;
+  label: string;
+  isDefault?: boolean;
+};
+
+export type TAutomationModels = {
+  enabled: boolean;
+  default?: { id: string; params: string };
+  options: TCursorModelOption[];
+};
+
 /**
  * Habla con el orquestador, que vive fuera de Plane pero se sirve bajo el
  * mismo dominio en /automation. Al ser mismo origen, la cookie de sesión viaja
@@ -65,5 +78,11 @@ export class AutomationService extends APIService {
       .catch((error) => {
         throw error?.response?.data;
       });
+  }
+
+  async fetchModels(projectId: string): Promise<TAutomationModels> {
+    return this.get(`/automation/api/projects/${projectId}/models`)
+      .then((response) => response?.data)
+      .catch(() => ({ enabled: false, options: [] }));
   }
 }

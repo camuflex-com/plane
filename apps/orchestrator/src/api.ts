@@ -7,6 +7,7 @@ import type { Db } from "@/db";
 import { getEnabledProject } from "@/db/queries";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
+import { flattenModelCatalog, selectionFromEnv, type ModelOption } from "@/model";
 
 type RunRow = {
   id: string;
@@ -55,9 +56,25 @@ const wrap = (handler: (req: Request, res: Response) => Promise<void>) => (req: 
   });
 };
 
+const MODEL_CACHE_MS = 5 * 60 * 1000;
+let modelCache: { at: number; options: ModelOption[] } | null = null;
+
 export function createApiRouter(db: Db, env: Env): Router {
   const api = Router();
   const cursor = new CursorClient(env);
+  const fallback = selectionFromEnv(env);
+
+  async function modelOptions(): Promise<ModelOption[]> {
+    if (modelCache && Date.now() - modelCache.at < MODEL_CACHE_MS) return modelCache.options;
+    try {
+      const options = flattenModelCatalog(await cursor.listModels(), fallback);
+      modelCache = { at: Date.now(), options };
+      return options;
+    } catch (error) {
+      logger.warn("no se pudo listar modelos de Cursor", { error: String(error) });
+      return flattenModelCatalog([], fallback);
+    }
+  }
 
   api.get(
     "/projects/:projectId/runs",
@@ -103,6 +120,25 @@ export function createApiRouter(db: Db, env: Env): Router {
           prNumber: r.pr_number,
         })),
       });
+    })
+  );
+
+  /** Modelos que el formulario de crear issue puede elegir. */
+  api.get(
+    "/projects/:projectId/models",
+    wrap(async (req: Request, res: Response) => {
+      const { projectId } = req.params;
+      const config = await getEnabledProject(db, projectId);
+      if (!config) {
+        res.json({ enabled: false, options: [] });
+        return;
+      }
+      if (!(await canSeeProject(env, req.header("cookie") ?? "", config.planeWorkspaceSlug, projectId))) {
+        res.status(403).json({ error: "sin acceso a este proyecto" });
+        return;
+      }
+      const options = await modelOptions();
+      res.json({ enabled: true, default: fallback, options });
     })
   );
 

@@ -27,6 +27,8 @@ import { StateDropdown } from "@/components/dropdowns/state/dropdown";
 import { ParentIssuesListModal } from "@/components/issues/parent-issues-list-modal";
 import { IssueLabelSelect } from "@/components/issues/select";
 import { IssueIdentifier } from "@/components/issues/issue-detail/issue-identifier";
+import { CursorModelSelect } from "@/components/issues/issue-modal/components/cursor-model-select";
+import type { TCursorModelOption } from "@/services/automation.service";
 // hooks
 import { useProjectEstimates } from "@/hooks/store/estimates";
 import { useProject } from "@/hooks/store/use-project";
@@ -45,6 +47,8 @@ type TIssueDefaultPropertiesProps = {
   isDraft: boolean;
   handleFormChange: () => void;
   setSelectedParentIssue: (issue: ISearchIssueResponse) => void;
+  cursorModel?: TCursorModelOption | null;
+  onCursorModelChange?: (value: TCursorModelOption) => void;
 };
 
 export const IssueDefaultProperties = observer(function IssueDefaultProperties(props: TIssueDefaultPropertiesProps) {
@@ -60,6 +64,8 @@ export const IssueDefaultProperties = observer(function IssueDefaultProperties(p
     isDraft,
     handleFormChange,
     setSelectedParentIssue,
+    cursorModel,
+    onCursorModelChange,
   } = props;
   // states
   const [parentIssueListModalOpen, setParentIssueListModalOpen] = useState(false);
@@ -121,6 +127,9 @@ export const IssueDefaultProperties = observer(function IssueDefaultProperties(p
           </div>
         )}
       />
+      {!id && onCursorModelChange && (
+        <CursorModelSelect projectId={projectId} value={cursorModel ?? null} onChange={onCursorModelChange} />
+      )}
       <Controller
         control={control}
         name="assignee_ids"

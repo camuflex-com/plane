@@ -6,6 +6,7 @@ import { GitHubClient, type PullRequest } from "@/clients/github";
 import { HttpError } from "@/clients/http";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
+import { parseModelMarker, selectionFromEnv, stripModelMarker } from "@/model";
 import {
   getEnabledProject,
   getProjectByRepo,
@@ -71,7 +72,9 @@ export class Executor {
       case "reconcile.bugbot":
         // Jobs encolados por el sondeo viejo: ya no se aplican. El veredicto
         // llega por webhook; rehacerlo desde GitHub reaplicaba reviews viejas.
-        logger.info("reconcile de Bugbot desactivado, se espera el webhook", { runId: (job.payload as { runId?: number }).runId });
+        logger.info("reconcile de Bugbot desactivado, se espera el webhook", {
+          runId: (job.payload as { runId?: number }).runId,
+        });
         return;
       default:
         logger.warn("tipo de trabajo desconocido", { kind: job.kind });
@@ -116,14 +119,22 @@ export class Executor {
     switch (action.type) {
       case "start_agent": {
         const issue = await this.plane.getIssue(slug, config.planeProjectId, action.issueId);
+        const model = parseModelMarker(issue.description_stripped) ?? selectionFromEnv(this.env);
         const agent = await this.cursor.createAgent({
           prompt: buildPrompt(issue.name, issue.description_stripped, config.baseBranch),
           repoUrl: `https://github.com/${owner}/${repo}`,
           baseBranch: config.baseBranch,
           name: `plane-${issue.name.slice(0, 60)}`,
+          model,
         });
         await updateRun(this.db, run.id, { cursorAgentId: agent.id });
-        logger.info("agente lanzado", { runId: run.id, agentId: agent.id, cursorUrl: agent.url });
+        logger.info("agente lanzado", {
+          runId: run.id,
+          agentId: agent.id,
+          cursorUrl: agent.url,
+          model: model.id,
+          params: model.params,
+        });
         return;
       }
 
@@ -524,12 +535,13 @@ export function cleanFinding(body: string): string {
 }
 
 function buildPrompt(title: string, description: string | null, baseBranch: string): string {
+  const body = stripModelMarker(description);
   return [
     `Implementa la siguiente tarea y abre un pull request contra \`${baseBranch}\`.`,
     "",
     `# ${title}`,
     "",
-    description?.trim() || "(La issue no trae descripción; guíate por el título.)",
+    body || "(La issue no trae descripción; guíate por el título.)",
     "",
     "Cíñete al alcance descrito. No hagas refactors ni cambios de formato no relacionados.",
   ].join("\n");

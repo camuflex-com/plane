@@ -64,6 +64,22 @@ describe("parseIssuePayload", () => {
     }
   });
 
+  it("acepta model y modelParams", () => {
+    const parsed = parseIssuePayload(
+      JSON.stringify({ name: "Alerta", model: "composer-2", modelParams: "fast=true" })
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.payload.model).toBe("composer-2");
+      expect(parsed.payload.modelParams).toBe("fast=true");
+    }
+  });
+
+  it("rechaza un model inválido", () => {
+    const parsed = parseIssuePayload(JSON.stringify({ name: "x", model: "no spaces" }));
+    expect(parsed.ok).toBe(false);
+  });
+
   it("rechaza una priority desconocida", () => {
     const parsed = parseIssuePayload(JSON.stringify({ name: "x", priority: "critical" }));
     expect(parsed.ok).toBe(false);
@@ -87,17 +103,27 @@ describe("dedupeKey", () => {
 
 describe("issueIsClosed", () => {
   it("trata Done/cancelled como cerrada", () => {
-    expect(issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "Done", group: "completed" } })).toBe(
-      true
-    );
-    expect(issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "Cancelled", group: "cancelled" } })).toBe(
-      true
-    );
+    expect(
+      issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "Done", group: "completed" } })
+    ).toBe(true);
+    expect(
+      issueIsClosed({
+        id: "1",
+        name: "x",
+        description_stripped: null,
+        state: { name: "Cancelled", group: "cancelled" },
+      })
+    ).toBe(true);
   });
 
   it("deja abierta In Progress e In Review", () => {
     expect(
-      issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "In Progress", group: "started" } })
+      issueIsClosed({
+        id: "1",
+        name: "x",
+        description_stripped: null,
+        state: { name: "In Progress", group: "started" },
+      })
     ).toBe(false);
     expect(
       issueIsClosed({ id: "1", name: "x", description_stripped: null, state: { name: "In Review", group: "started" } })
@@ -152,6 +178,18 @@ describe("createIngestedIssue", () => {
       created: true,
       reopened: false,
     });
+  });
+
+  it("deja el modelo elegido en la descripción", async () => {
+    const createIssue = vi.fn().mockResolvedValue({ id: "issue-1", name: "Alerta", sequence_id: 12 });
+    const findIssueByExternal = vi.fn().mockResolvedValue(null);
+    const plane = { createIssue, findIssueByExternal } as unknown as PlaneClient;
+    await createIngestedIssue(plane, config, {
+      ...payload,
+      model: "composer-2",
+      modelParams: "fast=true",
+    });
+    expect(createIssue.mock.calls[0][2].description).toContain("[camuflex-model composer-2 fast=true]");
   });
 
   it("reutiliza la issue abierta del mismo recurso y no crea otra", async () => {

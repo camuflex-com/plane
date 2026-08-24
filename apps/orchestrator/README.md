@@ -41,6 +41,8 @@ Variables en `orchestrator.env` (validadas al arrancar, ver [env.ts](src/env.ts)
 | `PLANE_WEBHOOK_SECRET`  | Verificar la firma de Plane                      |
 | `PLANE_BOT_USER_ID`     | **Crítico**: el usuario cuyos eventos se ignoran |
 | `CURSOR_API_KEY`        | Lanzar agentes                                   |
+| `CURSOR_MODEL`          | Modelo de las issues. Default: `grok-4.6`        |
+| `CURSOR_MODEL_PARAMS`   | Default: `effort=high,fast=true`                 |
 | `GITHUB_TOKEN`          | Comentar, mergear y leer reviews                 |
 | `GITHUB_WEBHOOK_SECRET` | Verificar la firma de GitHub                     |
 
@@ -110,11 +112,15 @@ En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` 
   "name": "Título",
   "description": "Markdown opcional",
   "resource": "lambda:app-health",
-  "priority": "high"
+  "priority": "high",
+  "model": "grok-4.6",
+  "modelParams": "effort=high,fast=true"
 }
 ```
 
 `resource` (o `externalId`) es la guarda: varios errores del mismo sitio reutilizan la issue abierta (HTTP 200). Si ya estaba en Done, se reabre a In Progress. Sin `resource` se usa el título. Sin `projectId` se usa el proyecto de `camuflex-com/camuflex-backend` en `project_config`.
+
+Al crear una issue en Plane, el formulario muestra un selector de modelo si el proyecto está en `project_config`. El default es Grok 4.6 high+fast. La elección viaja en la descripción (`[camuflex-model …]`) para que el orquestador la lea al lanzar el agente.
 
 ### Permisos del `GITHUB_TOKEN`
 
@@ -175,5 +181,5 @@ devuelve la run a `in_review` y vuelve a pedir Bugbot.
   para no dejar refs huérfanos; no se toca `main`. Aun así, Bugbot en verde
   no significa que el cambio sea correcto.
 - **`max_attempts` frena los rebotes.** Agotados los intentos la run se aparca y comenta en la issue. Sin ese tope, un bug que el agente no sepa arreglar daría vueltas quemando dinero.
-- **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual.
+- **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual. El modelo se elige al crear la issue (default **Grok 4.6** `effort=high,fast=true`).
 - `project_config` se edita por SQL; no hay interfaz.

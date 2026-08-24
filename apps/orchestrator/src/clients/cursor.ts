@@ -1,4 +1,5 @@
 import type { Env } from "@/env";
+import type { CursorModel, ModelSelection } from "@/model";
 import { requestJson } from "./http";
 
 /**
@@ -29,6 +30,26 @@ export type AgentDetail = {
  * encarga trabajo y se olvida. Quien avisa de que el trabajo terminó es
  * GitHub, cuando el agente abre el PR.
  */
+/**
+ * Convierte `effort=high,fast=true` en `[{id:"effort",value:"high"}, ...]`,
+ * que es la forma que espera la API.
+ */
+export function parseModelParams(raw: string | undefined): { id: string; value: string }[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(",")
+    .map((pair) => pair.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const index = pair.indexOf("=");
+      if (index === -1) return null;
+      const id = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      return id && value ? { id, value } : null;
+    })
+    .filter((p): p is { id: string; value: string } => p !== null);
+}
+
 export class CursorClient {
   constructor(private readonly env: Env) {}
 
@@ -45,6 +66,7 @@ export class CursorClient {
     repoUrl: string;
     baseBranch: string;
     name?: string;
+    model?: ModelSelection;
   }): Promise<CreatedAgent> {
     // Los nombres importan y no son los obvios: la API espera `url` y
     // `startingRef` dentro de cada repo, no `repoUrl`/`baseBranch`. Con los
@@ -63,8 +85,11 @@ export class CursorClient {
       openAsCursorGithubApp: true,
     };
     if (input.name) body.name = input.name;
-    // `model` también es un objeto, no un string.
-    if (this.env.CURSOR_MODEL) body.model = { id: this.env.CURSOR_MODEL };
+    // `model` es un objeto; sus parámetros van como lista de {id, value}.
+    // Si la issue no eligió, cae al default del env (grok-4.6 high+fast).
+    const modelId = input.model?.id || this.env.CURSOR_MODEL;
+    const params = parseModelParams(input.model?.params || this.env.CURSOR_MODEL_PARAMS);
+    body.model = params.length > 0 ? { id: modelId, params } : { id: modelId };
 
     const response = await requestJson<CreateAgentResponse>(`${this.env.CURSOR_BASE_URL}/v1/agents`, {
       method: "POST",
@@ -107,5 +132,14 @@ export class CursorClient {
     return requestJson<AgentDetail>(`${this.env.CURSOR_BASE_URL}/v1/agents/${agentId}`, {
       headers: this.headers,
     });
+  }
+
+  /** Modelos y variantes que acepta POST /v1/agents. */
+  async listModels(): Promise<CursorModel[]> {
+    const response = await requestJson<{ items?: CursorModel[] }>(`${this.env.CURSOR_BASE_URL}/v1/models`, {
+      headers: this.headers,
+      retries: 1,
+    });
+    return Array.isArray(response?.items) ? response.items : [];
   }
 }

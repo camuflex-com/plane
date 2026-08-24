@@ -45,6 +45,8 @@ import { useProjectState } from "@/hooks/store/use-project-state";
 import { useWorkspaceDraftIssues } from "@/hooks/store/workspace-draft";
 import { usePlatformOS } from "@/hooks/use-platform-os";
 import { useProjectIssueProperties } from "@/hooks/use-project-issue-properties";
+import { injectModelMarkerHtml } from "@/helpers/camuflex-model";
+import type { TCursorModelOption } from "@/services/automation.service";
 
 export interface IssueFormProps {
   data?: Partial<TIssue>;
@@ -98,6 +100,7 @@ export const IssueFormRoot = observer(function IssueFormRoot(props: IssueFormPro
   // states
   const [gptAssistantModal, setGptAssistantModal] = useState(false);
   const [isMoving, setIsMoving] = useState<boolean>(false);
+  const [cursorModel, setCursorModel] = useState<TCursorModelOption | null>(null);
 
   // refs
   const editorRef = useRef<EditorRefApi>(null);
@@ -171,6 +174,7 @@ export const IssueFormRoot = observer(function IssueFormRoot(props: IssueFormPro
       }
     }
     if (projectId && routeProjectId !== projectId) fetchCycles(workspaceSlug?.toString(), projectId);
+    setCursorModel(null);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -241,6 +245,10 @@ export const IssueFormRoot = observer(function IssueFormRoot(props: IssueFormPro
 
     // this condition helps to move the issues from draft to project issues
     if (formData.hasOwnProperty("is_draft")) submitData.is_draft = formData.is_draft;
+
+    if (!data?.id && cursorModel) {
+      submitData.description_html = injectModelMarkerHtml(submitData.description_html ?? "<p></p>", cursorModel);
+    }
 
     await onSubmit(submitData, is_draft_issue)
       .then(() => {
@@ -438,6 +446,8 @@ export const IssueFormRoot = observer(function IssueFormRoot(props: IssueFormPro
                   isDraft={isDraft}
                   handleFormChange={handleFormChange}
                   setSelectedParentIssue={setSelectedParentIssue}
+                  cursorModel={cursorModel}
+                  onCursorModelChange={setCursorModel}
                 />
               </div>
               {showActionButtons && (

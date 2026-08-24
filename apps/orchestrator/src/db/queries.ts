@@ -28,9 +28,8 @@ const toRun = (r: Record<string, unknown>): Run => ({
   cursorAgentId: (r.cursor_agent_id as string) ?? null,
   prNumber: r.pr_number === null ? null : Number(r.pr_number),
   headSha: (r.head_sha as string) ?? null,
-  lastBugbotReviewId: r.last_bugbot_review_id === null || r.last_bugbot_review_id === undefined
-    ? null
-    : Number(r.last_bugbot_review_id),
+  lastBugbotReviewId:
+    r.last_bugbot_review_id === null || r.last_bugbot_review_id === undefined ? null : Number(r.last_bugbot_review_id),
   state: r.state as RunState,
   attempts: Number(r.attempts),
 });

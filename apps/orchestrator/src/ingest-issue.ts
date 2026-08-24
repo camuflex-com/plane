@@ -2,6 +2,7 @@ import { HttpError } from "@/clients/http";
 import { issueIsClosed, type PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
 import { getEnabledProject, getProjectByRepo, type ProjectConfig } from "@/db/queries";
+import { appendModelMarker, isValidModelId } from "@/model";
 
 const DEFAULT_OWNER = "camuflex-com";
 const DEFAULT_REPO = "camuflex-backend";
@@ -20,6 +21,8 @@ export type IssueIngestPayload = {
   resource?: string;
   externalId?: string;
   externalSource: string;
+  model?: string;
+  modelParams?: string;
 };
 
 export type ParseResult = { ok: true; payload: IssueIngestPayload } | { ok: false; error: string };
@@ -66,6 +69,9 @@ export function parseIssuePayload(raw: string): ParseResult {
     return { ok: false, error: "priority inválida" };
   }
 
+  const model = asString(body.model);
+  if (model && !isValidModelId(model)) return { ok: false, error: "model inválido" };
+
   return {
     ok: true,
     payload: {
@@ -78,6 +84,8 @@ export function parseIssuePayload(raw: string): ParseResult {
       resource: asString(body.resource),
       externalId: asString(body.externalId) ?? asString(body.external_id),
       externalSource: asString(body.externalSource) ?? asString(body.external_source) ?? DEFAULT_SOURCE,
+      model,
+      modelParams: asString(body.modelParams) ?? asString(body.model_params),
     },
   };
 }
@@ -110,9 +118,13 @@ export async function createIngestedIssue(
   }
 
   try {
+    const description =
+      payload.model && isValidModelId(payload.model)
+        ? appendModelMarker(payload.description, { id: payload.model, params: payload.modelParams ?? "" })
+        : payload.description;
     const issue = await plane.createIssue(slug, projectId, {
       name: payload.name,
-      description: payload.description,
+      description,
       priority: payload.priority,
       stateName: "In Progress",
       externalId: key,
