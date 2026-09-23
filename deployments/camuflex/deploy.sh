@@ -122,8 +122,32 @@ rollback() {
   fi
 }
 
-log "descargando imágenes $NEW_TAG"
-if ! compose pull --quiet; then
+# Solo se descargan las imágenes que construye este repo, las de ECR.
+#
+# Las de terceros (postgres, valkey, rabbitmq, minio) se quedan con la que ya
+# está en la máquina. Descargarlas en cada despliegue tenía dos problemas:
+# una actualización no pedida de `minio:latest` sobre el volumen de uploads,
+# y que el despliegue entero se caiga cuando un tercero retira su imagen —
+# que es justo lo que pasó cuando `minio/minio` desapareció de Docker Hub.
+ecr_services() {
+  compose config --format json | python3 -c '
+import json, os, sys
+registry = os.environ["ECR_REGISTRY"]
+services = json.load(sys.stdin)["services"]
+print(" ".join(n for n, s in services.items() if str(s.get("image", "")).startswith(registry)))
+'
+}
+
+SERVICES=$(ECR_REGISTRY="$ECR_REGISTRY" ecr_services)
+if [ -z "$SERVICES" ]; then
+  log "ERROR: no se encontró ningún servicio con imagen de $ECR_REGISTRY"
+  env_set IMAGE_TAG "${PREV_TAG:-$NEW_TAG}"
+  exit 1
+fi
+
+log "descargando imágenes $NEW_TAG de: $SERVICES"
+# shellcheck disable=SC2086  # la lista se separa a propósito en servicios
+if ! compose pull --quiet $SERVICES; then
   log "ERROR: no se pudieron descargar las imágenes del tag $NEW_TAG"
   env_set IMAGE_TAG "${PREV_TAG:-$NEW_TAG}"
   exit 1
