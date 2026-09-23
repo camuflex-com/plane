@@ -23,9 +23,19 @@ export type PullRequest = {
   head: { sha: string; ref: string };
 };
 
+export type OrgRepo = {
+  name: string;
+  owner: { login: string };
+  default_branch: string;
+  archived: boolean;
+  disabled?: boolean;
+  /** KB. 0 = repo recién creado, sin ningún commit. */
+  size: number;
+};
+
 /**
  * Cliente REST de GitHub. Se usa `fetch` en vez de Octokit a propósito: solo
- * hacen falta cinco llamadas y no compensa arrastrar la dependencia.
+ * hacen falta unas pocas llamadas y no compensa arrastrar la dependencia.
  */
 export class GitHubClient {
   constructor(private readonly env: Env) {}
@@ -100,6 +110,50 @@ export class GitHubClient {
       method: "PUT",
       headers: this.headers,
       body: JSON.stringify({ merge_method: "squash", sha }),
+    });
+  }
+
+  /** Repos de la organización, sin paginar a mano: GitHub corta en 100. */
+  async listOrgRepos(org: string): Promise<OrgRepo[]> {
+    const repos: OrgRepo[] = [];
+    for (let page = 1; ; page++) {
+      // oxlint-disable-next-line no-await-in-loop -- cada página depende de la anterior.
+      const batch = await requestJson<OrgRepo[]>(
+        `${this.env.GITHUB_API_URL}/orgs/${org}/repos?type=all&per_page=100&page=${page}`,
+        { headers: this.headers }
+      );
+      repos.push(...batch);
+      if (batch.length < 100) return repos;
+    }
+  }
+
+  async branchExists(owner: string, repo: string, branch: string): Promise<boolean> {
+    try {
+      await requestJson(this.repoUrl(owner, repo, `branches/${encodeURIComponent(branch)}`), {
+        headers: this.headers,
+        retries: 0,
+      });
+      return true;
+    } catch (error) {
+      // 409 = repo vacío; 404 = la rama no existe.
+      if (error instanceof HttpError && (error.status === 404 || error.status === 409)) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Primer commit de un repo vacío. Sin él no existe la rama base y el agente
+   * de Cursor no tiene desde dónde partir.
+   */
+  async createInitialCommit(owner: string, repo: string, branch: string): Promise<void> {
+    await requestJson(this.repoUrl(owner, repo, "contents/README.md"), {
+      method: "PUT",
+      headers: this.headers,
+      body: JSON.stringify({
+        message: "chore: commit inicial",
+        content: Buffer.from(`# ${repo}\n`).toString("base64"),
+        branch,
+      }),
     });
   }
 

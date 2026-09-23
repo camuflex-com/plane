@@ -49,6 +49,12 @@ services:
     environment:
       PORT: 3100
       PLANE_BASE_URL: ${WEB_URL}
+      # Cada repo de la organización recibe su proyecto en Plane, con la
+      # automatización activa, en el workspace indicado.
+      GITHUB_ORG: camuflex-com
+      PLANE_WORKSPACE_SLUG: camuflex-backend
+      # admin@camuflex.com: entra como administrador de cada proyecto importado.
+      PLANE_PROJECT_LEAD_ID: 30b76147-b8dc-4534-a852-c5a418b908d4
     networks:
       default:
         # Alias con punto a propósito: Django valida la URL del webhook con

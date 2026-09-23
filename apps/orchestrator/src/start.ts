@@ -2,6 +2,7 @@ import { createPool, migrate } from "@/db";
 import { loadEnv } from "@/env";
 import { Executor } from "@/executor";
 import { logger } from "@/logger";
+import { runOrgSync } from "@/org-sync";
 import { runReconciler } from "@/reconciler";
 import { runWorker } from "@/queue";
 import { createServer } from "@/server";
@@ -24,6 +25,7 @@ async function main() {
   const workers = [
     runWorker(db, executor.handle, { pollMs: env.WORKER_POLL_MS, signal: controller.signal }),
     runReconciler(db, env, controller.signal),
+    runOrgSync(db, env, controller.signal),
   ];
 
   const shutdown = (signal: string) => {

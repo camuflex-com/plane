@@ -14,6 +14,23 @@ export type Issue = {
   sequence_id?: number;
 };
 
+export type Project = {
+  id: string;
+  name: string;
+  identifier: string;
+  external_source?: string | null;
+  external_id?: string | null;
+};
+
+export type CreateProjectInput = {
+  name: string;
+  identifier: string;
+  description?: string;
+  projectLeadId?: string;
+  externalSource: string;
+  externalId: string;
+};
+
 export type CreateIssueInput = {
   name: string;
   description?: string;
@@ -109,6 +126,50 @@ export class PlaneClient {
       method: "POST",
       headers: this.headers,
       body: JSON.stringify({ comment_html: toHtml(markdown) }),
+    });
+  }
+
+  /**
+   * Proyectos que ve el bot. Plane solo lista aquellos de los que es miembro
+   * (o públicos): uno privado ajeno no aparece, y crearlo de nuevo choca por
+   * nombre con un 409.
+   */
+  async listProjects(slug: string): Promise<Project[]> {
+    const projects: Project[] = [];
+    let cursor: string | null = null;
+    do {
+      const query = new URLSearchParams({ per_page: "100" });
+      if (cursor) query.set("cursor", cursor);
+      // oxlint-disable-next-line no-await-in-loop -- cada página depende de la anterior.
+      const page: { results: Project[]; next_cursor?: string; next_page_results?: boolean } = await requestJson(
+        this.url(slug, `projects/?${query.toString()}`),
+        { headers: this.headers }
+      );
+      projects.push(...page.results);
+      cursor = page.next_page_results && page.next_cursor ? page.next_cursor : null;
+    } while (cursor);
+    return projects;
+  }
+
+  /**
+   * Crea el proyecto a nombre del bot, que queda como administrador. Plane le
+   * pone los estados por defecto, "In Review" incluido. El `project_lead`
+   * entra también como administrador.
+   */
+  async createProject(slug: string, input: CreateProjectInput): Promise<Project> {
+    const body: Record<string, unknown> = {
+      name: input.name,
+      identifier: input.identifier,
+      description: input.description ?? "",
+      external_source: input.externalSource,
+      external_id: input.externalId,
+    };
+    if (input.projectLeadId) body.project_lead = input.projectLeadId;
+    return requestJson<Project>(this.url(slug, "projects/"), {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(body),
+      retries: 0,
     });
   }
 

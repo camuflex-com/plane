@@ -62,30 +62,53 @@ que el primer movimiento del orquestador se realimenta.
 Para el bot actual (`bot@camuflex.com`) el valor es
 `eea8b7cb-5ecd-426c-a740-1a64bcfef307`.
 
-## Habilitar un proyecto
+## Proyectos: importación automática de la organización
 
-Nada ocurre hasta que el proyecto está en `project_config`. Es el interruptor de seguridad.
+Cada repo de `GITHUB_ORG` (por defecto `camuflex-com`) tiene su proyecto en
+Plane sin hacer nada: al arrancar y cada `ORG_SYNC_INTERVAL_MS` (10 min), el
+orquestador lista los repos y, para cada uno sin fila en `project_config`
+([org-sync.ts](src/org-sync.ts)):
 
-```sql
-INSERT INTO project_config
-  (plane_project_id, plane_workspace_slug, github_owner, github_repo, base_branch, enabled, max_attempts)
-VALUES
-  ('<uuid del proyecto>', 'camuflex', 'camuflex-com', '<repo>', 'main', TRUE, 3);
-```
+1. Crea el proyecto en `PLANE_WORKSPACE_SLUG` a nombre del bot (que queda como
+   miembro administrador), con `PLANE_PROJECT_LEAD_ID` también como
+   administrador y los estados por defecto, _In Review_ incluido. Nombre e
+   identificador salen del repo: `camuflex-design-system` → _Camuflex Design
+   System_ / `DESIGNSYSTEM`.
+2. Si el repo está vacío, crea el commit inicial en su rama por defecto: sin
+   rama base el agente de Cursor no tiene desde dónde partir.
+3. Inserta la fila en `project_config` **habilitada**, con la rama por defecto
+   del repo como `base_branch` (`plane` → `preview`).
+
+Es idempotente: el proyecto lleva `external_id = owner/repo`, así que un alta
+que se quedó a medias se adopta en la pasada siguiente en vez de duplicarse.
+Los repos archivados se saltan. Una fila existente no se toca nunca: para
+apagar un repo, `UPDATE project_config SET enabled = FALSE` y la importación lo
+respeta. `ORG_SYNC_INTERVAL_MS=0` desactiva la importación.
 
 **El bot tiene que ser miembro del proyecto.** La API externa valida con
 `ProjectEntityPermission`, que exige una fila en `ProjectMember`: ser admin del
-workspace no basta. Sin eso, el orquestador recibe 403 al mover la issue.
+workspace no basta. En los proyectos importados lo es porque los crea él; uno
+creado a mano necesita que se le añada.
 
 ### El webhook de Plane
 
-En _Project Settings → Webhooks_ del proyecto:
+Uno solo, en _Workspace Settings → Webhooks_, para todo el workspace:
 
 - **Payload URL**: `http://orchestrator.internal:3100/automation/webhooks/plane`
-- **Eventos**: solo **Work items**. El orquestador descarta cualquier otro
-  (`payload.event !== "issue"`), así que ciclos, módulos y comentarios solo
-  añadirían entregas inútiles.
-- **Fire on entering a state**: solo **In Progress**.
+- **Eventos**: solo **Work items**.
+- **Proyectos**: ninguno (todo el workspace).
+- **Fire on entering a state**: ninguno.
+
+Sin proyectos ni estados de disparo a propósito: así un proyecto importado
+queda cubierto sin tocar Plane. Llegan todos los cambios de todas las issues y
+el orquestador se queda solo con las **transiciones** a _In Progress_
+([plane-trigger.ts](src/plane-trigger.ts)): cambio de `state` cuyo destino es
+In Progress, o issue creada ya en In Progress. Editar el título de una issue
+que ya estaba en In Progress no lanza nada.
+
+No debe haber otro webhook activo apuntando al orquestador: el mismo cambio
+llegaría dos veces con ids de entrega distintos y la deduplicación no lo
+pararía.
 
 El host lleva punto a propósito. Django valida la URL con `URLValidator`, que
 **rechaza los hostnames de una sola etiqueta**: con `orchestrator` a secas,
@@ -97,11 +120,7 @@ Y como resuelve a una IP privada, hace falta además
 bloquee la protección SSRF. Lo configura `deploy.sh`; el cambio exige reiniciar
 la API, porque el valor se lee al cargar los settings.
 
-El estado se verifica además en el servidor contra el payload, no solo por
-configuración: si alguien añadiera otro estado al disparador, el orquestador
-lo rechaza en vez de lanzar un agente sobre una issue que no toca.
-
-En GitHub, un webhook a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`. Sin los dos últimos el ciclo se queda en _In Review_ para siempre: **no hay sondeo** que recupere el veredicto.
+En GitHub, un único webhook **de organización** (no por repo) a `https://plane.camuflex.com/automation/webhooks/github` con los eventos `pull_request`, `pull_request_review` y `check_run`. Sin los dos últimos el ciclo se queda en _In Review_ para siempre: **no hay sondeo** que recupere el veredicto.
 
 ### Issues desde camuflex-backend
 
@@ -182,4 +201,4 @@ devuelve la run a `in_review` y vuelve a pedir Bugbot.
   no significa que el cambio sea correcto.
 - **`max_attempts` frena los rebotes.** Agotados los intentos la run se aparca y comenta en la issue. Sin ese tope, un bug que el agente no sepa arreglar daría vueltas quemando dinero.
 - **La calidad depende de las issues.** El prompt sale del título y la descripción tal cual. El modelo se elige al crear la issue (default **Grok 4.6** `effort=high,fast=true`).
-- `project_config` se edita por SQL; no hay interfaz.
+- `project_config` se rellena solo con la importación; para apagar o ajustar un repo, SQL.

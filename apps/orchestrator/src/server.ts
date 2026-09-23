@@ -7,6 +7,7 @@ import type { Env } from "@/env";
 import { isBugbot, isBugbotCheck } from "@/executor";
 import { createIngestedIssue, parseIssuePayload, resolveIngestProject } from "@/ingest-issue";
 import { logger } from "@/logger";
+import { entersTriggerState, type PlanePayload } from "@/plane-trigger";
 import { enqueue } from "@/queue";
 import { parseSecrets, verifyApiKey, verifyGitHubSignature, verifyPlaneSignatureAny } from "@/signatures";
 
@@ -21,7 +22,7 @@ export const BASE_PATH = "/automation";
 
 export function createServer(db: Db, env: Env): Express {
   const app = express();
-  // Uno por webhook de Plane: cada proyecto automatizado tiene el suyo.
+  // El del webhook de workspace; varios solo mientras se rota.
   const planeSecrets = parseSecrets(env.PLANE_WEBHOOK_SECRET);
   const routes = Router();
 
@@ -159,20 +160,6 @@ async function ingestExternalIssue(db: Db, env: Env, req: Request, res: Response
   }
 }
 
-type PlanePayload = {
-  event?: string;
-  action?: string;
-  data?: { id?: string; project?: string; state?: { id?: string; name?: string } };
-  activity?: { actor?: { id?: string } };
-};
-
-/**
- * Estado que arranca el trabajo. Se comprueba contra el payload en vez de
- * confiar en cómo esté configurado el webhook: si alguien añadiera otro estado
- * al disparador, se lanzarían agentes de Cursor sobre issues que no tocan.
- */
-const TRIGGER_STATE = "in progress";
-
 type GitHubPayload = {
   action?: string;
   repository?: { name?: string; owner?: { login?: string } };
@@ -201,23 +188,18 @@ async function ingestPlane(db: Db, env: Env, deliveryId: string, payload: PlaneP
     return;
   }
 
-  if (payload.event !== "issue") return;
-
   const issueId = payload.data?.id;
   const projectId = payload.data?.project;
   if (!issueId || !projectId) return;
 
+  // Se filtra ANTES de registrar la entrega: el webhook de workspace manda
+  // cada cambio de cada issue, y anotarlos todos haría crecer `deliveries`
+  // con ruido que nunca se procesa.
+  if (!entersTriggerState(payload)) return;
+
   // Segunda barrera: Plane reintenta las entregas fallidas.
   if (deliveryId && !(await claimDelivery(db, "plane", deliveryId))) {
     logger.debug("entrega de Plane repetida, ignorada", { deliveryId });
-    return;
-  }
-
-  // El webhook debería traer solo transiciones a In Progress, pero se verifica
-  // igualmente: la configuración vive fuera de este código y puede cambiar.
-  const stateName = payload.data?.state?.name?.trim().toLowerCase();
-  if (stateName && stateName !== TRIGGER_STATE) {
-    logger.info("estado que no dispara trabajo, ignorado", { issueId, state: payload.data?.state?.name });
     return;
   }
 

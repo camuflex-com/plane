@@ -14,8 +14,8 @@ const schema = z.object({
   PLANE_BASE_URL: z.string().url(),
   PLANE_API_KEY: z.string().min(1),
   /**
-   * Secretos de los webhooks de Plane, separados por comas. Plane genera uno
-   * distinto por webhook, así que hace falta uno por proyecto automatizado.
+   * Secretos de los webhooks de Plane, separados por comas. Basta con el del
+   * webhook de workspace; se aceptan varios para poder rotar sin cortes.
    */
   PLANE_WEBHOOK_SECRET: z.string().min(1),
   /**
@@ -39,6 +39,16 @@ const schema = z.object({
   GITHUB_TOKEN: z.string().min(1),
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
   GITHUB_API_URL: z.string().url().default("https://api.github.com"),
+
+  // Importación de la organización
+  /** Cada repo de esta organización tiene su proyecto en Plane. */
+  GITHUB_ORG: z.string().min(1).default("camuflex-com"),
+  /** Workspace de Plane donde se crean los proyectos importados. */
+  PLANE_WORKSPACE_SLUG: z.string().min(1).default("camuflex-backend"),
+  /** Usuario que entra como administrador de cada proyecto importado. */
+  PLANE_PROJECT_LEAD_ID: z.string().uuid().optional(),
+  /** 0 desactiva la importación. */
+  ORG_SYNC_INTERVAL_MS: z.coerce.number().default(600_000),
 
   // Cadencias
   WORKER_POLL_MS: z.coerce.number().default(2000),

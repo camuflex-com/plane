@@ -50,6 +50,27 @@ export async function getProjectByRepo(db: Db, owner: string, repo: string): Pro
   return res.rows[0] ? toConfig(res.rows[0]) : null;
 }
 
+/** Todos, habilitados o no: un repo apagado a mano no debe reimportarse. */
+export async function listProjectConfigs(db: Db): Promise<ProjectConfig[]> {
+  const res = await db.query(`SELECT * FROM project_config`);
+  return res.rows.map(toConfig);
+}
+
+export async function insertProjectConfig(db: Db, config: Omit<ProjectConfig, "maxAttempts">): Promise<void> {
+  await db.query(
+    `INSERT INTO project_config (plane_project_id, plane_workspace_slug, github_owner, github_repo, base_branch, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (plane_project_id) DO NOTHING`,
+    [
+      config.planeProjectId,
+      config.planeWorkspaceSlug,
+      config.githubOwner,
+      config.githubRepo,
+      config.baseBranch,
+      config.enabled,
+    ]
+  );
+}
+
 export async function getActiveRunForIssue(db: Db, issueId: string): Promise<Run | null> {
   const res = await db.query(
     `SELECT * FROM runs WHERE plane_issue_id = $1 AND state NOT IN ('merged','parked','failed')`,
