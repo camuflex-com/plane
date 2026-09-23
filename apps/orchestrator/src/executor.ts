@@ -18,9 +18,20 @@ import {
   type ProjectConfig,
 } from "@/db/queries";
 import type { Env } from "@/env";
+import { htmlToText } from "@/html-text";
 import { logger } from "@/logger";
 import { decide, type Action, type Event, type Run } from "@/machine";
-import type { Job } from "@/queue";
+import { classifyAgentStatus, gateVerdict, type AgentRunStatus } from "@/gate";
+import { enqueue, type Job } from "@/queue";
+
+/**
+ * Cada cuánto se vuelve a mirar un veredicto pospuesto, y cuántas veces.
+ * 90 × 1 min cubre agentes largos como el de un template completo.
+ */
+const GATE_DEFER_MS = 60_000;
+const MAX_GATE_DEFERRALS = 90;
+/** Tras sacar de borrador, GitHub tarda unos segundos en recalcular. */
+const READY_RECHECK_MS = 15_000;
 
 export class Executor {
   readonly plane: PlaneClient;
@@ -54,6 +65,7 @@ export class Executor {
             reviewId: number;
             state: string;
             body: string;
+            deferrals?: number;
           }
         );
       case "github.bugbot_check_success":
@@ -63,6 +75,7 @@ export class Executor {
             repo: string;
             prNumber: number | null;
             headSha: string | null;
+            deferrals?: number;
           }
         );
       case "github.pr_synchronized":
@@ -119,9 +132,10 @@ export class Executor {
     switch (action.type) {
       case "start_agent": {
         const issue = await this.plane.getIssue(slug, config.planeProjectId, action.issueId);
-        const model = parseModelMarker(issue.description_stripped) ?? selectionFromEnv(this.env);
+        const description = issueDescription(issue);
+        const model = parseModelMarker(description) ?? selectionFromEnv(this.env);
         const agent = await this.cursor.createAgent({
-          prompt: buildPrompt(issue.name, issue.description_stripped, config.baseBranch),
+          prompt: buildPrompt(issue.name, description, config.baseBranch),
           repoUrl: `https://github.com/${owner}/${repo}`,
           baseBranch: config.baseBranch,
           name: `plane-${issue.name.slice(0, 60)}`,
@@ -281,6 +295,7 @@ export class Executor {
     reviewId: number;
     state: string;
     body: string;
+    deferrals?: number;
   }): Promise<void> {
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
@@ -336,6 +351,9 @@ export class Executor {
       findings: interpreted.findings.length,
     });
 
+    const verdict = interpreted.kind === "success" ? "success" : "findings";
+    if (!(await this.passGate(run, config, verdict, payload.headSha, "github.bugbot_review", payload))) return;
+
     await this.apply(run, config, {
       type: "bugbot_verdict",
       prNumber: run.prNumber,
@@ -354,6 +372,7 @@ export class Executor {
     repo: string;
     prNumber: number | null;
     headSha: string | null;
+    deferrals?: number;
   }): Promise<void> {
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
@@ -381,12 +400,108 @@ export class Executor {
     }
 
     logger.info("veredicto de Bugbot", { prNumber: run.prNumber, kind: "success", source: "check" });
+    if (!(await this.passGate(run, config, "success", payload.headSha, "github.bugbot_check_success", payload))) return;
+
     await this.apply(run, config, {
       type: "bugbot_verdict",
       prNumber: run.prNumber,
       conclusion: "success",
       findings: [],
     });
+  }
+
+  /**
+   * Decide si un veredicto de Bugbot puede pasar ya a la máquina de estados.
+   *
+   * Devuelve true solo cuando hay que aplicarlo. En cualquier otro caso se
+   * ocupa ella misma de lo que toque —reencolar, sacar de borrador o
+   * aparcar— y devuelve false. Ver `gate.ts` para las reglas.
+   */
+  private async passGate(
+    run: Run,
+    config: ProjectConfig,
+    verdict: "success" | "findings",
+    reviewedSha: string | null,
+    jobKind: string,
+    payload: Record<string, unknown> & { deferrals?: number }
+  ): Promise<boolean> {
+    const { githubOwner: owner, githubRepo: repo } = config;
+    const prNumber = run.prNumber as number;
+    const pr = await this.github.getPullRequest(owner, repo, prNumber);
+    const agent = await this.agentStatus(run.cursorAgentId);
+    const deferrals = payload.deferrals ?? 0;
+
+    const decision = gateVerdict({
+      verdict,
+      agent,
+      reviewedSha,
+      deferrals,
+      maxDeferrals: MAX_GATE_DEFERRALS,
+      pr: {
+        merged: pr.merged,
+        draft: pr.draft,
+        headSha: pr.head.sha,
+        mergeable: pr.mergeable,
+        mergeableState: pr.mergeable_state,
+      },
+    });
+
+    switch (decision.kind) {
+      case "apply":
+        return true;
+
+      case "stale":
+        logger.info("veredicto de un commit que ya no es HEAD, se descarta", {
+          prNumber,
+          reviewedSha,
+          headSha: pr.head.sha,
+        });
+        return false;
+
+      case "wait":
+        await enqueue(this.db, jobKind, { ...payload, deferrals: deferrals + 1 }, GATE_DEFER_MS);
+        logger.info("veredicto pospuesto", { prNumber, verdict, reason: decision.reason, deferrals: deferrals + 1 });
+        return false;
+
+      case "mark_ready":
+        // Solo se llega aquí con veredicto limpio: es la única vía por la que
+        // un PR sale de borrador.
+        await this.github.markReadyForReview(pr.node_id);
+        logger.info("Bugbot limpio: PR sacado de borrador", { prNumber });
+        // GitHub recalcula la mergeabilidad al salir de borrador; se vuelve a
+        // mirar en breve en vez de mergear a ciegas.
+        await enqueue(this.db, jobKind, { ...payload, deferrals: deferrals + 1 }, READY_RECHECK_MS);
+        return false;
+
+      case "give_up":
+        await this.parkRun(run, config, decision.reason);
+        return false;
+    }
+  }
+
+  /** Estado del último run del agente. Si Cursor no responde, "unknown". */
+  private async agentStatus(agentId: string | null): Promise<AgentRunStatus> {
+    if (!agentId) return "unknown";
+    try {
+      const agent = await this.cursor.getAgent(agentId);
+      if (!agent.latestRunId) return "unknown";
+      const latest = await this.cursor.getRun(agentId, agent.latestRunId);
+      return classifyAgentStatus(latest.status);
+    } catch (error) {
+      logger.warn("no se pudo consultar el agente en Cursor", { agentId, error: String(error) });
+      return "unknown";
+    }
+  }
+
+  private async parkRun(run: Run, config: ProjectConfig, reason: string): Promise<void> {
+    await updateRun(this.db, run.id, { state: "parked", lastError: reason });
+    logger.warn("run aparcada", { runId: run.id, reason });
+    await this.plane.comment(
+      config.planeWorkspaceSlug,
+      config.planeProjectId,
+      run.planeIssueId,
+      `La automatización se detiene: ${reason}. El PR #${run.prNumber} queda en borrador para revisión manual.`
+    );
   }
 
   /**
@@ -532,6 +647,17 @@ export function cleanFinding(body: string): string {
       .map((l) => l.trim())
       .find((l) => l && !l.startsWith("<!--")) ?? "";
   return firstLine.replace(/^#+\s*/, "").slice(0, 300);
+}
+
+/**
+ * Texto de la descripción de la issue.
+ *
+ * Sale de `description_html` porque es lo que devuelve la API externa;
+ * `description_stripped` queda solo como respaldo. Durante semanas el agente
+ * recibió únicamente el título por leer el campo equivocado.
+ */
+export function issueDescription(issue: { description_html?: string | null; description_stripped?: string | null }) {
+  return htmlToText(issue.description_html) || issue.description_stripped?.trim() || "";
 }
 
 function buildPrompt(title: string, description: string | null, baseBranch: string): string {

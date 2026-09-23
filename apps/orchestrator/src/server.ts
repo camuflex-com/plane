@@ -301,11 +301,11 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
       logger.warn("PR sin número o sin sha, se ignora", { owner, repo, action: payload.action });
       return;
     }
-    // Un borrador todavía no se revisa; ya volverá como `ready_for_review`.
-    if (pr.draft) {
-      logger.info("PR en borrador, se espera a que esté listo", { owner, repo, prNumber: pr.number });
-      return;
-    }
+    // Los borradores se asocian a la run desde que se abren. Antes se
+    // descartaban esperando un `ready_for_review` que Cursor no siempre manda:
+    // si terminaba sin sacar el PR de borrador, la run se quedaba sin PR y la
+    // aprobación de Bugbot no tenía a qué aplicarse. Ahora es el orquestador
+    // quien saca el PR de borrador, y solo cuando Bugbot lo da limpio.
     const job = {
       owner,
       repo,
@@ -319,7 +319,7 @@ async function ingestGitHub(db: Db, deliveryId: string, eventName: string, paylo
       return;
     }
     await enqueue(db, "github.pr_opened", job);
-    logger.info("PR encolado", { owner, repo, prNumber: pr.number, action: payload.action });
+    logger.info("PR encolado", { owner, repo, prNumber: pr.number, action: payload.action, draft: Boolean(pr.draft) });
     return;
   }
 

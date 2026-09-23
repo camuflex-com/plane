@@ -13,6 +13,8 @@ export type MergeableState = "clean" | "blocked" | "unstable" | "dirty" | "behin
 
 export type PullRequest = {
   number: number;
+  /** Id global de GraphQL: la única vía para sacar un PR de borrador. */
+  node_id: string;
   state: string;
   merged: boolean;
   draft: boolean;
@@ -66,6 +68,29 @@ export class GitHubClient {
       this.repoUrl(owner, repo, `pulls/${prNumber}/reviews/${reviewId}/comments?per_page=100`),
       { headers: this.headers }
     );
+  }
+
+  /**
+   * Saca un PR de borrador.
+   *
+   * La API REST no permite hacerlo; solo la mutación GraphQL. Se llama
+   * únicamente cuando Bugbot dio el PR por limpio: mientras tenga hallazgos,
+   * el PR se queda en borrador.
+   */
+  async markReadyForReview(nodeId: string): Promise<void> {
+    const response = await requestJson<{ errors?: { message: string }[] }>(`${this.env.GITHUB_API_URL}/graphql`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({
+        query:
+          "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+        variables: { id: nodeId },
+      }),
+    });
+    // GraphQL responde 200 aunque la mutación falle: el error viene en el cuerpo.
+    if (response?.errors?.length) {
+      throw new Error(`No se pudo sacar el PR de borrador: ${response.errors.map((e) => e.message).join("; ")}`);
+    }
   }
 
   async mergePullRequest(owner: string, repo: string, prNumber: number, sha: string): Promise<void> {

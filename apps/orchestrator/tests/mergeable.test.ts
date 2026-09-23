@@ -4,6 +4,7 @@ import { assertMergeable } from "@/executor";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   number: 7,
+  node_id: "PR_kwDOtest",
   state: "open",
   merged: false,
   draft: false,

@@ -6,7 +6,10 @@ type IssueState = string | { id?: string; name?: string; group?: string };
 export type Issue = {
   id: string;
   name: string;
-  description_stripped: string | null;
+  /** La API externa lo excluye: casi siempre llega `undefined`. */
+  description_stripped?: string | null;
+  /** Lo que sí devuelve la API externa. Fuente real de la descripción. */
+  description_html?: string | null;
   state: IssueState;
   sequence_id?: number;
 };
