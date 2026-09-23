@@ -13,6 +13,10 @@ const schema = z.object({
   // Plane
   PLANE_BASE_URL: z.string().url(),
   PLANE_API_KEY: z.string().min(1),
+  /**
+   * Secretos de los webhooks de Plane, separados por comas. Plane genera uno
+   * distinto por webhook, así que hace falta uno por proyecto automatizado.
+   */
   PLANE_WEBHOOK_SECRET: z.string().min(1),
   /**
    * Usuario bot cuyos eventos se ignoran. Sin esto, cada cambio de estado que

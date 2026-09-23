@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseModelParams } from "@/clients/cursor";
 import { loadEnv } from "@/env";
-import {
-  appendModelMarker,
-  flattenModelCatalog,
-  formatModelMarker,
-  parseModelMarker,
-  stripModelMarker,
-} from "@/model";
+import { appendModelMarker, flattenModelCatalog, formatModelMarker, parseModelMarker, stripModelMarker } from "@/model";
 
 const required = {
   DATABASE_URL: "postgres://localhost/orchestrator",

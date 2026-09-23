@@ -65,9 +65,7 @@ describe("parseIssuePayload", () => {
   });
 
   it("acepta model y modelParams", () => {
-    const parsed = parseIssuePayload(
-      JSON.stringify({ name: "Alerta", model: "composer-2", modelParams: "fast=true" })
-    );
+    const parsed = parseIssuePayload(JSON.stringify({ name: "Alerta", model: "composer-2", modelParams: "fast=true" }));
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.payload.model).toBe("composer-2");

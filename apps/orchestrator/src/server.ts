@@ -8,7 +8,7 @@ import { isBugbot, isBugbotCheck } from "@/executor";
 import { createIngestedIssue, parseIssuePayload, resolveIngestProject } from "@/ingest-issue";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
-import { verifyApiKey, verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
+import { parseSecrets, verifyApiKey, verifyGitHubSignature, verifyPlaneSignatureAny } from "@/signatures";
 
 /**
  * Prefijo bajo el que se sirve todo.
@@ -21,6 +21,8 @@ export const BASE_PATH = "/automation";
 
 export function createServer(db: Db, env: Env): Express {
   const app = express();
+  // Uno por webhook de Plane: cada proyecto automatizado tiene el suyo.
+  const planeSecrets = parseSecrets(env.PLANE_WEBHOOK_SECRET);
   const routes = Router();
 
   // El cuerpo crudo es imprescindible: la firma se calcula sobre los bytes
@@ -52,7 +54,7 @@ export function createServer(db: Db, env: Env): Express {
     const raw = req.body instanceof Buffer ? req.body.toString("utf8") : "";
     const signature = req.header("X-Plane-Signature");
 
-    if (!verifyPlaneSignature(raw, signature, env.PLANE_WEBHOOK_SECRET)) {
+    if (!verifyPlaneSignatureAny(raw, signature, planeSecrets)) {
       logger.warn("firma de Plane inválida");
       res.status(401).json({ error: "firma inválida" });
       return;

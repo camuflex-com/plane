@@ -21,6 +21,27 @@ export function verifyPlaneSignature(rawBody: string, signature: string | undefi
   return safeEqual(expected, signature);
 }
 
+/**
+ * Separa una lista de secretos escrita como `a,b,c`.
+ *
+ * Plane genera un secreto distinto por cada webhook, así que con un proyecto
+ * por repo hay tantos secretos como proyectos automatizados.
+ */
+export function parseSecrets(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Vale si la firma coincide con cualquiera de los secretos. */
+export function verifyPlaneSignatureAny(rawBody: string, signature: string | undefined, secrets: string[]): boolean {
+  // `some` se detiene en la primera coincidencia, pero cada comparación sigue
+  // siendo en tiempo constante; lo único que filtra es cuál de los secretos
+  // coincidió, y todos pertenecen a la misma instancia de Plane.
+  return secrets.some((secret) => verifyPlaneSignature(rawBody, signature, secret));
+}
+
 /** GitHub usa `X-Hub-Signature-256`, con prefijo `sha256=`. */
 export function verifyGitHubSignature(rawBody: string, signature: string | undefined, secret: string): boolean {
   if (!signature) return false;

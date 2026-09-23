@@ -1,6 +1,12 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { verifyApiKey, verifyGitHubSignature, verifyPlaneSignature } from "@/signatures";
+import {
+  parseSecrets,
+  verifyApiKey,
+  verifyGitHubSignature,
+  verifyPlaneSignature,
+  verifyPlaneSignatureAny,
+} from "@/signatures";
 
 const SECRET = "un-secreto-cualquiera";
 const BODY = JSON.stringify({ event: "issue", data: { id: "abc" } });
@@ -59,5 +65,34 @@ describe("firma de GitHub", () => {
 
   it("rechaza un cuerpo alterado", () => {
     expect(verifyGitHubSignature('{"x":1}', githubSig(BODY), SECRET)).toBe(false);
+  });
+});
+
+describe("varios webhooks de Plane", () => {
+  // Plane genera un secreto por webhook: con un proyecto por repo, el
+  // orquestador tiene que aceptar la firma de cualquiera de ellos.
+  const A = "plane_wh_aaaa";
+  const B = "plane_wh_bbbb";
+
+  it("separa la lista y descarta vacíos", () => {
+    expect(parseSecrets(` ${A} , ${B} ,, `)).toEqual([A, B]);
+    expect(parseSecrets(A)).toEqual([A]);
+  });
+
+  it("acepta la firma del primer webhook", () => {
+    expect(verifyPlaneSignatureAny(BODY, planeSig(BODY, A), [A, B])).toBe(true);
+  });
+
+  it("acepta la firma del segundo webhook", () => {
+    expect(verifyPlaneSignatureAny(BODY, planeSig(BODY, B), [A, B])).toBe(true);
+  });
+
+  it("rechaza una firma que no es de ninguno", () => {
+    expect(verifyPlaneSignatureAny(BODY, planeSig(BODY, "otro"), [A, B])).toBe(false);
+  });
+
+  // Compatibilidad: la configuración actual es un único secreto sin comas.
+  it("sigue funcionando con un único secreto", () => {
+    expect(verifyPlaneSignatureAny(BODY, planeSig(BODY, A), parseSecrets(A))).toBe(true);
   });
 });
