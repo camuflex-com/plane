@@ -22,10 +22,16 @@ describe("parámetros del modelo", () => {
     ]);
   });
 
-  it("sin CURSOR_MODEL usa grok-4.6 en high y fast", () => {
+  it("sin CURSOR_MODEL usa Claude Opus 5.5 en effort high", () => {
     const env = loadEnv(required);
-    expect(env.CURSOR_MODEL).toBe("grok-4.6");
-    expect(env.CURSOR_MODEL_PARAMS).toBe("effort=high,fast=true");
+    expect(env.CURSOR_MODEL).toBe("claude-opus-5-5");
+    expect(env.CURSOR_MODEL_PARAMS).toBe("context=1m,effort=high,fast=false");
+  });
+
+  it("admite parámetros vacíos para modelos que no tienen", () => {
+    expect(loadEnv({ ...required, CURSOR_MODEL: "gemini-3.1-pro", CURSOR_MODEL_PARAMS: "" }).CURSOR_MODEL_PARAMS).toBe(
+      ""
+    );
   });
 
   it("tolera espacios", () => {

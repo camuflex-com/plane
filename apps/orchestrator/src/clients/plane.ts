@@ -130,6 +130,19 @@ export class PlaneClient {
   }
 
   /**
+   * URL firmada para descargar un archivo subido al editor (imágenes de la
+   * descripción). Caduca en una hora: se usa en el momento y no se guarda.
+   */
+  async getAssetUrl(slug: string, assetId: string): Promise<string> {
+    const response = await requestJson<{ asset_url?: string }>(this.url(slug, `assets/${assetId}/`), {
+      headers: this.headers,
+      retries: 1,
+    });
+    if (!response?.asset_url) throw new Error(`Plane no devolvió URL para el asset ${assetId}`);
+    return response.asset_url;
+  }
+
+  /**
    * Proyectos que ve el bot. Plane solo lista aquellos de los que es miembro
    * (o públicos): uno privado ajeno no aparece, y crearlo de nuevo choca por
    * nombre con un 409.

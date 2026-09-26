@@ -41,8 +41,8 @@ Variables en `orchestrator.env` (validadas al arrancar, ver [env.ts](src/env.ts)
 | `PLANE_WEBHOOK_SECRET`  | Verificar la firma de Plane                      |
 | `PLANE_BOT_USER_ID`     | **Crítico**: el usuario cuyos eventos se ignoran |
 | `CURSOR_API_KEY`        | Lanzar agentes                                   |
-| `CURSOR_MODEL`          | Modelo de las issues. Default: `grok-4.6`        |
-| `CURSOR_MODEL_PARAMS`   | Default: `effort=high,fast=true`                 |
+| `CURSOR_MODEL`          | Modelo por defecto. `claude-opus-5-5`            |
+| `CURSOR_MODEL_PARAMS`   | `context=1m,effort=high,fast=false`              |
 | `GITHUB_TOKEN`          | Comentar, mergear y leer reviews                 |
 | `GITHUB_WEBHOOK_SECRET` | Verificar la firma de GitHub                     |
 
@@ -132,14 +132,18 @@ En GitHub, un único webhook **de organización** (no por repo) a `https://plane
   "description": "Markdown opcional",
   "resource": "lambda:app-health",
   "priority": "high",
-  "model": "grok-4.6",
-  "modelParams": "effort=high,fast=true"
+  "model": "claude-opus-5-5",
+  "modelParams": "context=1m,effort=high,fast=false"
 }
 ```
 
 `resource` (o `externalId`) es la guarda: varios errores del mismo sitio reutilizan la issue abierta (HTTP 200). Si ya estaba en Done, se reabre a In Progress. Sin `resource` se usa el título. Sin `projectId` se usa el proyecto de `camuflex-com/camuflex-backend` en `project_config`.
 
-Al crear una issue en Plane, el formulario muestra un selector de modelo si el proyecto está en `project_config`. El default es Grok 4.6 high+fast. La elección viaja en la descripción (`[camuflex-model …]`) para que el orquestador la lea al lanzar el agente.
+Al crear una issue en Plane, el formulario muestra un selector de modelo si el proyecto está en `project_config`. El default es Claude Opus 5.5 (effort high, contexto 1M), fijado en `deployments/camuflex/docker-compose.ecr.yml`. La elección viaja en la descripción (`[camuflex-model …]`) para que el orquestador la lea al lanzar el agente.
+
+Cada modelo tiene parámetros propios (Grok 4.6 `effort`; Grok 4.7 `reasoning_effort` + `context`; GPT-5.6 `reasoning` + `context`; Claude `effort` + `context` + `thinking`). Antes de lanzar, el orquestador valida la selección contra `GET /v1/models` ([model-resolve.ts](src/model-resolve.ts)): una variante exacta pasa tal cual; un parámetro que el modelo no conoce se descarta; lo que falta se completa con la variante por defecto **de ese mismo modelo**; un modelo retirado cae al default. Nunca se le mandan a un modelo los parámetros de otro.
+
+Las imágenes de la descripción viajan al agente ([issue-images.ts](src/issue-images.ts)): se descargan de Plane y se mandan en `prompt.images` (máx. 5, 15 MB, PNG/JPEG/GIF/WebP). En el texto quedan como `[Imagen N]`, en el mismo orden. Solo se descargan assets de Plane o URLs del propio Plane.
 
 ### Permisos del `GITHUB_TOKEN`
 

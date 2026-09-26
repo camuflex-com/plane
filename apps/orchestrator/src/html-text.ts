@@ -41,10 +41,25 @@ function inline(html: string): string {
   return decodeEntities(text).replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Imágenes de la descripción: el editor de Plane las guarda como
+ * `<image-component src="<id del asset>">`; un HTML pegado puede traer `<img>`.
+ */
+const IMAGE_RE = /<(?:image-component|img)\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>(?:\s*<\/image-component>)?/gi;
+
+/** Los `src` de las imágenes, en el orden en que aparecen. */
+export function extractImageSources(html: string | null | undefined): string[] {
+  return [...(html ?? "").matchAll(IMAGE_RE)].map((m) => m[1] ?? "").filter(Boolean);
+}
+
 export function htmlToText(html: string | null | undefined): string {
   if (!html?.trim()) return "";
 
-  let text = html;
+  // Antes se descartaban sin dejar rastro, y una issue que decía "en base a
+  // esta imagen" llegaba al agente sin imagen y sin aviso. Ahora cada una deja
+  // una referencia numerada que coincide con el orden de los adjuntos.
+  let imageIndex = 0;
+  let text = html.replace(IMAGE_RE, () => `\n[Imagen ${++imageIndex}]\n`);
 
   // Cada fila de tabla pasa a una línea con las celdas separadas por "|", así
   // la relación fila/columna sobrevive. Las filas quedan contiguas y las

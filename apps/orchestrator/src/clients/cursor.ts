@@ -1,4 +1,5 @@
 import type { Env } from "@/env";
+import type { PromptImage } from "@/issue-images";
 import type { CursorModel, ModelSelection } from "@/model";
 import { requestJson } from "./http";
 
@@ -66,14 +67,16 @@ export class CursorClient {
     repoUrl: string;
     baseBranch: string;
     name?: string;
-    model?: ModelSelection;
+    /** Ya validado contra el catálogo (`resolveModel`): se manda tal cual. */
+    model: ModelSelection;
+    images?: PromptImage[];
   }): Promise<CreatedAgent> {
     // Los nombres importan y no son los obvios: la API espera `url` y
     // `startingRef` dentro de cada repo, no `repoUrl`/`baseBranch`. Con los
     // nombres equivocados responde `validation_error: "Required"` sin decir
     // qué campo falta.
     const body: Record<string, unknown> = {
-      prompt: { text: input.prompt },
+      prompt: input.images?.length ? { text: input.prompt, images: input.images } : { text: input.prompt },
       repos: [{ url: input.repoUrl, startingRef: input.baseBranch }],
       autoCreatePR: true,
       // Que el PR lo abra la GitHub App de Cursor y no la cuenta humana
@@ -86,10 +89,11 @@ export class CursorClient {
     };
     if (input.name) body.name = input.name;
     // `model` es un objeto; sus parámetros van como lista de {id, value}.
-    // Si la issue no eligió, cae al default del env (grok-4.6 high+fast).
-    const modelId = input.model?.id || this.env.CURSOR_MODEL;
-    const params = parseModelParams(input.model?.params || this.env.CURSOR_MODEL_PARAMS);
-    body.model = params.length > 0 ? { id: modelId, params } : { id: modelId };
+    // Antes, un modelo elegido sin parámetros heredaba los del default del env
+    // (`effort=high,fast=true` de Grok) aunque no fueran suyos. Ahora llega ya
+    // resuelto y no se le añade nada.
+    const params = parseModelParams(input.model.params);
+    body.model = params.length > 0 ? { id: input.model.id, params } : { id: input.model.id };
 
     const response = await requestJson<CreateAgentResponse>(`${this.env.CURSOR_BASE_URL}/v1/agents`, {
       method: "POST",

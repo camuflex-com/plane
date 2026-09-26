@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { issueDescription } from "@/executor";
-import { htmlToText } from "@/html-text";
+import { extractImageSources, htmlToText } from "@/html-text";
 
 // Fragmento del HTML real de PANELSEED-1: tabla con cabecera, <strong>,
 // <code> y el marcado del editor de Plane.
@@ -60,5 +60,29 @@ describe("issueDescription", () => {
 
   it("sin nada, cadena vacía", () => {
     expect(issueDescription({})).toBe("");
+  });
+});
+
+describe("imágenes de la descripción", () => {
+  // Así guardó Plane la captura de PANELSEED-2: el agente recibió el texto
+  // "en base a esa imagen" sin la imagen y sin ningún aviso.
+  const PANELSEED_2 =
+    '<image-component data-id="a37e" src="0092eac4-c232-4e95-9356-cdb7bc03cb3f" id="a37e" width="299px" height="224px" status="uploaded"></image-component>' +
+    '<p class="editor-paragraph-block">En base a esa imagen, vamos a reconstruir todo el proyecto.</p>';
+
+  it("extrae los src en orden", () => {
+    const html = `${PANELSEED_2}<p>Y esta otra:</p><img src="https://plane.camuflex.com/x.png" alt="">`;
+    expect(extractImageSources(html)).toEqual([
+      "0092eac4-c232-4e95-9356-cdb7bc03cb3f",
+      "https://plane.camuflex.com/x.png",
+    ]);
+  });
+
+  it("deja una referencia numerada en el texto en vez de borrarla", () => {
+    expect(htmlToText(PANELSEED_2)).toBe("[Imagen 1]\nEn base a esa imagen, vamos a reconstruir todo el proyecto.");
+  });
+
+  it("sin imágenes no cambia nada", () => {
+    expect(extractImageSources("<p>hola</p>")).toEqual([]);
   });
 });

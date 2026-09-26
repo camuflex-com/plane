@@ -50,6 +50,20 @@ export async function requestJson<T>(url: string, init: RequestInit & { retries?
   }
 }
 
+/** Descarga binaria con tope de tamaño: una imagen enorme no llena la memoria. */
+export async function fetchBytes(url: string, maxBytes: number, init: RequestInit = {}): Promise<Uint8Array> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new HttpError(response.status, url.split("?")[0] ?? url, await response.text().catch(() => ""));
+  }
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > maxBytes) throw new Error(`archivo de ${declared} bytes, supera el máximo de ${maxBytes}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes)
+    throw new Error(`archivo de ${bytes.byteLength} bytes, supera el máximo de ${maxBytes}`);
+  return bytes;
+}
+
 const backoffMs = (attempt: number) => Math.min(30_000, 500 * 2 ** attempt);
 
 function retryAfterMs(response: Response): number | null {

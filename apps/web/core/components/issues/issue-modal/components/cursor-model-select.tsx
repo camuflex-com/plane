@@ -13,9 +13,9 @@ import { AutomationService, type TCursorModelOption } from "@/services/automatio
 const automationService = new AutomationService();
 
 const FALLBACK: TCursorModelOption = {
-  id: "grok-4.6",
-  params: "effort=high,fast=true",
-  label: "Grok 4.6 · high · fast",
+  id: "claude-opus-5-5",
+  params: "context=1m,effort=high,fast=false",
+  label: "Claude Opus 5.5 · 1m · high",
   isDefault: true,
 };
 
@@ -65,11 +65,7 @@ export const CursorModelSelect = observer(function CursorModelSelect(props: Prop
         maxHeight="lg"
       >
         {options.map((option) => (
-          <CustomMenu.MenuItem
-            key={`${option.id}|${option.params}`}
-            className="!p-1"
-            onClick={() => onChange(option)}
-          >
+          <CustomMenu.MenuItem key={`${option.id}|${option.params}`} className="!p-1" onClick={() => onChange(option)}>
             {option.label}
           </CustomMenu.MenuItem>
         ))}

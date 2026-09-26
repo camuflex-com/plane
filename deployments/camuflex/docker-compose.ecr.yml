@@ -55,6 +55,12 @@ services:
       PLANE_WORKSPACE_SLUG: camuflex-backend
       # admin@camuflex.com: entra como administrador de cada proyecto importado.
       PLANE_PROJECT_LEAD_ID: 30b76147-b8dc-4534-a852-c5a418b908d4
+      # Modelo por defecto de los agentes (cada issue puede elegir otro).
+      # Aquí y no en orchestrator.env: `environment` gana sobre `env_file`, y
+      # así cambiarlo es un commit. Los parámetros deben ser una variante de
+      # este modelo en GET /v1/models, en el mismo orden.
+      CURSOR_MODEL: claude-opus-5-5
+      CURSOR_MODEL_PARAMS: context=1m,effort=high,fast=false
     networks:
       default:
         # Alias con punto a propósito: Django valida la URL del webhook con

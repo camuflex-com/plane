@@ -6,7 +6,8 @@ import { GitHubClient, type PullRequest } from "@/clients/github";
 import { HttpError } from "@/clients/http";
 import { PlaneClient } from "@/clients/plane";
 import type { Db } from "@/db";
-import { parseModelMarker, selectionFromEnv, stripModelMarker } from "@/model";
+import { parseModelMarker, selectionFromEnv, stripModelMarker, type CursorModel } from "@/model";
+import { resolveModel } from "@/model-resolve";
 import {
   getEnabledProject,
   getProjectByRepo,
@@ -19,6 +20,7 @@ import {
 } from "@/db/queries";
 import type { Env } from "@/env";
 import { htmlToText } from "@/html-text";
+import { collectIssueImages, imagesNote } from "@/issue-images";
 import { logger } from "@/logger";
 import { decide, type Action, type Event, type Run } from "@/machine";
 import { classifyAgentStatus, gateVerdict, type AgentRunStatus } from "@/gate";
@@ -32,6 +34,7 @@ const GATE_DEFER_MS = 60_000;
 const MAX_GATE_DEFERRALS = 90;
 /** Tras sacar de borrador, GitHub tarda unos segundos en recalcular. */
 const READY_RECHECK_MS = 15_000;
+const MODEL_CATALOG_TTL_MS = 5 * 60_000;
 
 export class Executor {
   readonly plane: PlaneClient;
@@ -45,6 +48,25 @@ export class Executor {
     this.plane = new PlaneClient(env);
     this.cursor = new CursorClient(env);
     this.github = new GitHubClient(env);
+  }
+
+  private catalogCache: { at: number; items: CursorModel[] } | null = null;
+
+  /**
+   * Catálogo de modelos de Cursor, cacheado unos minutos. Si Cursor no
+   * responde se devuelve vacío y `resolveModel` manda la selección sin validar
+   * en vez de bloquear el arranque del agente.
+   */
+  private async modelCatalog(): Promise<CursorModel[]> {
+    if (this.catalogCache && Date.now() - this.catalogCache.at < MODEL_CATALOG_TTL_MS) return this.catalogCache.items;
+    try {
+      const items = await this.cursor.listModels();
+      if (items.length) this.catalogCache = { at: Date.now(), items };
+      return items;
+    } catch (error) {
+      logger.warn("no se pudo leer el catálogo de modelos de Cursor", { error: String(error) });
+      return [];
+    }
   }
 
   handle = async (job: Job): Promise<void> => {
@@ -133,13 +155,29 @@ export class Executor {
       case "start_agent": {
         const issue = await this.plane.getIssue(slug, config.planeProjectId, action.issueId);
         const description = issueDescription(issue);
-        const model = parseModelMarker(description) ?? selectionFromEnv(this.env);
+        const model = resolveModel(
+          parseModelMarker(description),
+          selectionFromEnv(this.env),
+          await this.modelCatalog()
+        );
+        if (model.adjustments.length) {
+          logger.warn("modelo ajustado al catálogo de Cursor", {
+            runId: run.id,
+            model: model.id,
+            why: model.adjustments,
+          });
+        }
+        const images = await collectIssueImages(this.plane, slug, this.env.PLANE_BASE_URL, issue.description_html);
+        if (images.skipped.length) {
+          logger.warn("imágenes de la issue sin adjuntar", { runId: run.id, skipped: images.skipped });
+        }
         const agent = await this.cursor.createAgent({
-          prompt: buildPrompt(issue.name, description, config.baseBranch),
+          prompt: buildPrompt(issue.name, description, config.baseBranch, imagesNote(images)),
           repoUrl: `https://github.com/${owner}/${repo}`,
           baseBranch: config.baseBranch,
           name: `plane-${issue.name.slice(0, 60)}`,
           model,
+          images: images.images,
         });
         await updateRun(this.db, run.id, { cursorAgentId: agent.id });
         logger.info("agente lanzado", {
@@ -148,6 +186,7 @@ export class Executor {
           cursorUrl: agent.url,
           model: model.id,
           params: model.params,
+          images: images.attached.length,
         });
         return;
       }
@@ -660,7 +699,7 @@ export function issueDescription(issue: { description_html?: string | null; desc
   return htmlToText(issue.description_html) || issue.description_stripped?.trim() || "";
 }
 
-function buildPrompt(title: string, description: string | null, baseBranch: string): string {
+function buildPrompt(title: string, description: string | null, baseBranch: string, imageNote = ""): string {
   const body = stripModelMarker(description);
   return [
     `Implementa la siguiente tarea y abre un pull request contra \`${baseBranch}\`.`,
@@ -668,6 +707,7 @@ function buildPrompt(title: string, description: string | null, baseBranch: stri
     `# ${title}`,
     "",
     body || "(La issue no trae descripción; guíate por el título.)",
+    ...(imageNote ? ["", imageNote] : []),
     "",
     "Cíñete al alcance descrito. No hagas refactors ni cambios de formato no relacionados.",
   ].join("\n");

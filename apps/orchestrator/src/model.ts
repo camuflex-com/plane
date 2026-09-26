@@ -19,6 +19,8 @@ export type CursorModelVariant = {
 export type CursorModel = {
   id?: string;
   displayName?: string;
+  /** Nombres alternativos que la API también acepta (`opus-latest`, …). */
+  aliases?: string[];
   variants?: CursorModelVariant[];
 };
 
