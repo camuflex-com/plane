@@ -48,7 +48,8 @@ export type Action =
   | { type: "start_agent"; issueId: string; projectId: string }
   | { type: "move_issue"; issueId: string; to: "in_progress" | "in_review" | "done" }
   | { type: "comment_issue"; issueId: string; body: string }
-  | { type: "request_bugbot"; prNumber: number }
+  /** `headSha`: el commit que Bugbot debe revisar, para no volver a pedirlo. */
+  | { type: "request_bugbot"; prNumber: number; headSha: string }
   | { type: "send_followup"; agentId: string; findings: string[] }
   | { type: "merge_pr"; prNumber: number }
   | { type: "park"; reason: string };
@@ -111,16 +112,17 @@ export function decide(run: Run | null, event: Event, maxAttempts: number): Deci
         nextState: "in_review",
         actions: [
           { type: "move_issue", issueId: run.planeIssueId, to: "in_review" },
-          { type: "request_bugbot", prNumber: event.prNumber },
+          { type: "request_bugbot", prNumber: event.prNumber, headSha: event.headSha },
         ],
       };
     }
 
     case "pr_synchronized": {
       if (!run) return NOTHING("sync sin run asociada");
-      // Un push mientras ya estamos en revisión no cambia el ciclo: Bugbot
-      // re-corre o ya está pedido. Solo hay que rearmar cuando veníamos de
-      // corregir, para volver a aceptar el veredicto.
+      // Un push mientras ya estamos en revisión no cambia el estado. Pero
+      // Bugbot NO revisa solo los commits nuevos de un borrador: el executor
+      // programa `github.ensure_bugbot` tras cada sync para pedirlo si falta.
+      // Aquí solo se rearma cuando veníamos de corregir.
       if (run.state === "in_review") {
         return { nextState: null, actions: [] };
       }
@@ -131,7 +133,7 @@ export function decide(run: Run | null, event: Event, maxAttempts: number): Deci
         nextState: "in_review",
         actions: [
           { type: "move_issue", issueId: run.planeIssueId, to: "in_review" },
-          { type: "request_bugbot", prNumber: event.prNumber },
+          { type: "request_bugbot", prNumber: event.prNumber, headSha: event.headSha },
         ],
       };
     }

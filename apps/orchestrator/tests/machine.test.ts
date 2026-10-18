@@ -93,6 +93,7 @@ describe("PR abierto", () => {
     );
     expect(d.nextState).toBe("in_review");
     expect(kinds(d)).toEqual(["move_issue", "request_bugbot"]);
+    expect(d.actions.find((a) => a.type === "request_bugbot")).toMatchObject({ prNumber: 9, headSha: "s" });
   });
 
   it("ignora un PR que llega fuera de tiempo", () => {
@@ -272,6 +273,8 @@ describe("recorrido completo", () => {
     const afterPush = step({ type: "pr_synchronized", prNumber: 7, headSha: "s2" });
     expect(state).toBe("in_review");
     expect(kinds(afterPush)).toEqual(["move_issue", "request_bugbot"]);
+    // La revisión se pide para el commit nuevo, no para el que ya se revisó.
+    expect(afterPush.actions.find((a) => a.type === "request_bugbot")).toMatchObject({ headSha: "s2" });
 
     step({ type: "bugbot_verdict", prNumber: 7, conclusion: "success", findings: [] });
     expect(state).toBe("merged");

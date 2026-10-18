@@ -13,6 +13,7 @@ import {
   getProjectByRepo,
   getActiveRunForIssue,
   getActiveRunForPr,
+  getBugbotRequestedSha,
   getRunForBugbot,
   createRun,
   updateRun,
@@ -23,7 +24,7 @@ import { htmlToText } from "@/html-text";
 import { collectIssueImages, imagesNote } from "@/issue-images";
 import { logger } from "@/logger";
 import { decide, type Action, type Event, type Run } from "@/machine";
-import { classifyAgentStatus, gateVerdict, type AgentRunStatus } from "@/gate";
+import { bugbotRequestDecision, classifyAgentStatus, gateVerdict, type AgentRunStatus } from "@/gate";
 import { enqueue, type Job } from "@/queue";
 
 /**
@@ -35,6 +36,8 @@ const MAX_GATE_DEFERRALS = 90;
 /** Tras sacar de borrador, GitHub tarda unos segundos en recalcular. */
 const READY_RECHECK_MS = 15_000;
 const MODEL_CATALOG_TTL_MS = 5 * 60_000;
+/** Espera tras un push antes de pedir Bugbot: deja llegar los commits en ráfaga. */
+const ENSURE_BUGBOT_DELAY_MS = 90_000;
 
 export class Executor {
   readonly plane: PlaneClient;
@@ -102,6 +105,8 @@ export class Executor {
         );
       case "github.pr_synchronized":
         return this.onPrSynchronized(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
+      case "github.ensure_bugbot":
+        return this.onEnsureBugbot(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
       case "reconcile.bugbot":
@@ -201,6 +206,7 @@ export class Executor {
 
       case "request_bugbot":
         await this.github.requestBugbotReview(owner, repo, action.prNumber);
+        await updateRun(this.db, run.id, { bugbotRequestedSha: action.headSha });
         return;
 
       case "send_followup":
@@ -324,6 +330,62 @@ export class Executor {
       prNumber: payload.prNumber,
       headSha: payload.headSha,
     });
+
+    // Con un retardo: el agente suele empujar varios commits seguidos, y solo
+    // el último merece revisión. El job descarta el suyo si llegó otro push.
+    await this.ensureBugbot(config, payload.prNumber, payload.headSha, ENSURE_BUGBOT_DELAY_MS);
+  }
+
+  /** Programa la comprobación de que Bugbot revise este commit. */
+  private async ensureBugbot(config: ProjectConfig, prNumber: number, headSha: string, delayMs = 0): Promise<void> {
+    await enqueue(
+      this.db,
+      "github.ensure_bugbot",
+      { owner: config.githubOwner, repo: config.githubRepo, prNumber, headSha },
+      delayMs
+    );
+  }
+
+  /**
+   * Pide "bugbot run" para el HEAD del PR si nadie lo pidió todavía.
+   *
+   * Bugbot no revisa solo los commits nuevos de un borrador. Si el agente
+   * empuja mientras Bugbot revisa, el veredicto llega del commit anterior, se
+   * descarta por viejo, y sin esto la run esperaba para siempre (PR #53 de
+   * camuflex-backend, 2026-10-18). Es idempotente: se puede encolar de más.
+   */
+  private async onEnsureBugbot(payload: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headSha: string;
+  }): Promise<void> {
+    const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
+    if (!config) return;
+
+    const run = await getActiveRunForPr(this.db, config.planeProjectId, payload.prNumber);
+    // En `fixing` el sync de la corrección ya pide la revisión por la máquina.
+    if (!run || run.state !== "in_review") return;
+
+    const pr = await this.github.getPullRequest(payload.owner, payload.repo, payload.prNumber);
+    const decision = bugbotRequestDecision({
+      runState: run.state,
+      pr: { merged: pr.merged, state: pr.state, headSha: pr.head.sha },
+      scheduledSha: payload.headSha,
+      requestedSha: await getBugbotRequestedSha(this.db, run.id),
+    });
+    if (!decision.request) {
+      logger.debug("no se pide Bugbot", { runId: run.id, prNumber: payload.prNumber, reason: decision.reason });
+      return;
+    }
+
+    await this.github.requestBugbotReview(payload.owner, payload.repo, payload.prNumber);
+    await updateRun(this.db, run.id, { headSha: pr.head.sha, bugbotRequestedSha: pr.head.sha });
+    logger.info("Bugbot pedido para el HEAD sin revisar", {
+      runId: run.id,
+      prNumber: payload.prNumber,
+      headSha: pr.head.sha,
+    });
   }
 
   private async onBugbotReview(payload: {
@@ -359,6 +421,7 @@ export class Executor {
         reviewSha: payload.headSha,
         runSha: run.headSha,
       });
+      await this.ensureBugbot(config, run.prNumber, run.headSha);
       return;
     }
 
@@ -431,6 +494,7 @@ export class Executor {
         checkSha: payload.headSha,
         runSha: run.headSha,
       });
+      await this.ensureBugbot(config, run.prNumber, run.headSha);
       return;
     }
 
@@ -495,6 +559,7 @@ export class Executor {
           reviewedSha,
           headSha: pr.head.sha,
         });
+        await this.ensureBugbot(config, prNumber, pr.head.sha);
         return false;
 
       case "wait":

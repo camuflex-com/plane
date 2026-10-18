@@ -105,3 +105,28 @@ export function gateVerdict(input: GateInput): GateDecision {
   // blocked / unstable / behind: normalmente checks de CI todavía en curso.
   return wait(`el PR no está listo para mergear (mergeable_state = ${pr.mergeableState})`);
 }
+
+export type BugbotRequestInput = {
+  runState: string;
+  pr: { merged: boolean; state: string; headSha: string };
+  /** HEAD para el que se programó la comprobación. */
+  scheduledSha: string;
+  /** Último commit para el que ya se pidió "bugbot run". */
+  requestedSha: string | null;
+};
+
+/**
+ * ¿Hay que pedir "bugbot run" para el HEAD del PR?
+ *
+ * Bugbot no revisa solo los commits nuevos de un borrador, así que un push
+ * durante la revisión deja el HEAD sin veredicto. Se pide solo si nadie lo
+ * pidió ya para ese commit y si sigue siendo el HEAD: cada push programa su
+ * propia comprobación, y la del último es la única que cuenta.
+ */
+export function bugbotRequestDecision(input: BugbotRequestInput): { request: boolean; reason: string } {
+  if (input.runState !== "in_review") return { request: false, reason: `run en ${input.runState}` };
+  if (input.pr.merged || input.pr.state !== "open") return { request: false, reason: "PR cerrado" };
+  if (input.pr.headSha !== input.scheduledSha) return { request: false, reason: "hubo otro push" };
+  if (input.requestedSha === input.pr.headSha) return { request: false, reason: "ya pedido para este commit" };
+  return { request: true, reason: "HEAD sin revisión pedida" };
+}

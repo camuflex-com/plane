@@ -3,7 +3,7 @@
 // en orden. Paralelizarlas rompería justamente lo que se busca.
 import { sleep } from "@/clients/http";
 import type { Db } from "@/db";
-import { findStaleRuns } from "@/db/queries";
+import { findStaleRuns, findUnreviewedHeads } from "@/db/queries";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
@@ -11,7 +11,8 @@ import { enqueue } from "@/queue";
 /**
  * Red de seguridad para lo que los webhooks no cubren.
  *
- * Solo agentes que mueren sin abrir PR: la v1 de Cursor no emite webhooks.
+ * Agentes que mueren sin abrir PR (la v1 de Cursor no emite webhooks) y HEADs
+ * en revisión para los que nunca se pidió "bugbot run".
  * El veredicto de Bugbot NO se sondea. GitHub ya lo manda por
  * `pull_request_review` y `check_run`; volver a leer el PR reaplicaba reviews
  * viejas, quemaba intentos y cortaba ciclos que seguían vivos.
@@ -34,4 +35,19 @@ async function reconcileOnce(db: Db, env: Env): Promise<void> {
     logger.warn("run sin PR, se marca para aparcar", { runId: run.id });
     await enqueue(db, "reconcile.stale", { runId: run.id, minutes: env.AGENT_STALE_MINUTES });
   }
+
+  // Un HEAD en revisión sin "bugbot run" no recibirá veredicto nunca. El job
+  // comprueba el PR antes de comentar, así que repetirlo no duplica nada.
+  for (const head of await findUnreviewedHeads(db, UNREVIEWED_QUIET_MINUTES)) {
+    logger.warn("HEAD en revisión sin pedir a Bugbot, se pide", { runId: head.runId, prNumber: head.prNumber });
+    await enqueue(db, "github.ensure_bugbot", {
+      owner: head.owner,
+      repo: head.repo,
+      prNumber: head.prNumber,
+      headSha: head.headSha,
+    });
+  }
 }
+
+/** Margen para que el job programado tras el sync actúe antes que el barrido. */
+const UNREVIEWED_QUIET_MINUTES = 10;

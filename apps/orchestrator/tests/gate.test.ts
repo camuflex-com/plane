@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAgentStatus, gateVerdict, type GateInput } from "@/gate";
+import { bugbotRequestDecision, classifyAgentStatus, gateVerdict, type GateInput } from "@/gate";
 
 const input = (over: Partial<GateInput> = {}, pr: Partial<GateInput["pr"]> = {}): GateInput => ({
   verdict: "success",
@@ -96,5 +96,45 @@ describe("mergeabilidad tras salir de borrador", () => {
 
   it("un PR ya mergeado se deja registrar", () => {
     expect(gateVerdict(input({ agent: "running" }, { merged: true })).kind).toBe("apply");
+  });
+});
+
+describe("pedir Bugbot para el HEAD", () => {
+  const base = {
+    runState: "in_review",
+    pr: { merged: false, state: "open", headSha: "a5e0f18" },
+    scheduledSha: "a5e0f18",
+    requestedSha: "b62cb02",
+  };
+
+  // PR #53 de camuflex-backend: "bugbot run" se pidió para b62cb02, el agente
+  // empujó a5e0f18 mientras Bugbot revisaba, y el veredicto de b62cb02 se
+  // descartó por viejo. Nadie pidió revisar a5e0f18 y la run quedó colgada.
+  it("pide revisión para un HEAD empujado durante la revisión", () => {
+    expect(bugbotRequestDecision(base).request).toBe(true);
+  });
+
+  it("no la repite si ya se pidió para ese commit", () => {
+    expect(bugbotRequestDecision({ ...base, requestedSha: "a5e0f18" }).request).toBe(false);
+  });
+
+  it("una run vieja sin registro también la pide", () => {
+    expect(bugbotRequestDecision({ ...base, requestedSha: null }).request).toBe(true);
+  });
+
+  it("si hubo otro push, la deja al job de ese push", () => {
+    expect(bugbotRequestDecision({ ...base, scheduledSha: "b62cb02" })).toEqual({
+      request: false,
+      reason: "hubo otro push",
+    });
+  });
+
+  it("no comenta en un PR mergeado o cerrado", () => {
+    expect(bugbotRequestDecision({ ...base, pr: { ...base.pr, merged: true } }).request).toBe(false);
+    expect(bugbotRequestDecision({ ...base, pr: { ...base.pr, state: "closed" } }).request).toBe(false);
+  });
+
+  it("fuera de revisión no hace nada: en `fixing` lo pide la máquina", () => {
+    expect(bugbotRequestDecision({ ...base, runState: "fixing" }).request).toBe(false);
   });
 });

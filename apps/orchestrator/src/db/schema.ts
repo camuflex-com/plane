@@ -69,4 +69,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_pending ON jobs (run_after) WHERE locked_at IS NULL;
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_bugbot_review_id BIGINT;
+
+-- Último commit para el que se pidió "bugbot run". Bugbot no revisa solo los
+-- commits nuevos de un PR en borrador: sin saber qué se pidió, un push durante
+-- la revisión dejaba la run esperando un veredicto que nunca llega.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS bugbot_requested_sha TEXT;
 `;

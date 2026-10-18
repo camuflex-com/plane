@@ -155,6 +155,7 @@ export async function updateRun(
     lastBugbotReviewId?: number;
     incrementAttempts?: boolean;
     lastError?: string;
+    bugbotRequestedSha?: string;
   }
 ): Promise<void> {
   const sets: string[] = ["updated_at = now()"];
@@ -170,10 +171,42 @@ export async function updateRun(
   if (patch.headSha) add("head_sha", patch.headSha);
   if (patch.lastBugbotReviewId !== undefined) add("last_bugbot_review_id", patch.lastBugbotReviewId);
   if (patch.lastError !== undefined) add("last_error", patch.lastError);
+  if (patch.bugbotRequestedSha) add("bugbot_requested_sha", patch.bugbotRequestedSha);
   if (patch.incrementAttempts) sets.push("attempts = attempts + 1");
 
   values.push(id);
   await db.query(`UPDATE runs SET ${sets.join(", ")} WHERE id = $${values.length}`, values);
+}
+
+/** Commit para el que se pidió la última revisión de Bugbot en esta run. */
+export async function getBugbotRequestedSha(db: Db, runId: number): Promise<string | null> {
+  const res = await db.query(`SELECT bugbot_requested_sha FROM runs WHERE id = $1`, [runId]);
+  return (res.rows[0]?.bugbot_requested_sha as string | null | undefined) ?? null;
+}
+
+export type UnreviewedHead = { runId: number; owner: string; repo: string; prNumber: number; headSha: string };
+
+/**
+ * Runs en revisión cuyo HEAD nunca recibió "bugbot run". Red de seguridad
+ * para cuando se pierde el sync o el veredicto viejo que lo habría pedido.
+ */
+export async function findUnreviewedHeads(db: Db, quietMinutes: number): Promise<UnreviewedHead[]> {
+  const res = await db.query(
+    `SELECT r.id, p.github_owner, p.github_repo, r.pr_number, r.head_sha
+       FROM runs r JOIN project_config p USING (plane_project_id)
+      WHERE r.state = 'in_review' AND p.enabled
+        AND r.pr_number IS NOT NULL AND r.head_sha IS NOT NULL
+        AND r.bugbot_requested_sha IS DISTINCT FROM r.head_sha
+        AND r.updated_at < now() - ($1 || ' minutes')::interval`,
+    [String(quietMinutes)]
+  );
+  return res.rows.map((r) => ({
+    runId: Number(r.id),
+    owner: r.github_owner as string,
+    repo: r.github_repo as string,
+    prNumber: Number(r.pr_number),
+    headSha: r.head_sha as string,
+  }));
 }
 
 export async function findStaleRuns(db: Db, minutes: number): Promise<Run[]> {
