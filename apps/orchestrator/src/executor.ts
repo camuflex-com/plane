@@ -106,7 +106,11 @@ export class Executor {
       case "github.pr_synchronized":
         return this.onPrSynchronized(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
       case "github.ensure_bugbot":
-        return this.onEnsureBugbot(job.payload as { owner: string; repo: string; prNumber: number; headSha: string });
+        return this.onEnsureBugbot(
+          job.payload as { owner: string; repo: string; prNumber: number; headSha: string; force?: boolean }
+        );
+      case "reconcile.bugbot_silent":
+        return this.onBugbotSilent(job.payload as { runId: number });
       case "reconcile.stale":
         return this.onStale(job.payload as { runId: number; minutes: number });
       case "reconcile.bugbot":
@@ -359,6 +363,7 @@ export class Executor {
     repo: string;
     prNumber: number;
     headSha: string;
+    force?: boolean;
   }): Promise<void> {
     const config = await getProjectByRepo(this.db, payload.owner, payload.repo);
     if (!config) return;
@@ -373,6 +378,7 @@ export class Executor {
       pr: { merged: pr.merged, state: pr.state, headSha: pr.head.sha },
       scheduledSha: payload.headSha,
       requestedSha: await getBugbotRequestedSha(this.db, run.id),
+      force: payload.force,
     });
     if (!decision.request) {
       logger.debug("no se pide Bugbot", { runId: run.id, prNumber: payload.prNumber, reason: decision.reason });
@@ -380,12 +386,33 @@ export class Executor {
     }
 
     await this.github.requestBugbotReview(payload.owner, payload.repo, payload.prNumber);
-    await updateRun(this.db, run.id, { headSha: pr.head.sha, bugbotRequestedSha: pr.head.sha });
-    logger.info("Bugbot pedido para el HEAD sin revisar", {
-      runId: run.id,
-      prNumber: payload.prNumber,
+    await updateRun(this.db, run.id, {
       headSha: pr.head.sha,
+      bugbotRequestedSha: pr.head.sha,
+      bugbotRerequest: Boolean(payload.force),
     });
+    logger.info(
+      payload.force ? "Bugbot pedido de nuevo: el veredicto no se aplicó" : "Bugbot pedido para el HEAD sin revisar",
+      {
+        runId: run.id,
+        prNumber: payload.prNumber,
+        headSha: pr.head.sha,
+      }
+    );
+  }
+
+  /** Bugbot no dio un veredicto aplicable ni repitiéndolo: lo decide una persona. */
+  private async onBugbotSilent(payload: { runId: number }): Promise<void> {
+    const res = await this.db.query(`SELECT * FROM runs WHERE id = $1`, [payload.runId]);
+    const row = res.rows[0];
+    if (!row || row.state !== "in_review") return;
+    const config = await getEnabledProject(this.db, row.plane_project_id);
+    if (!config) return;
+    await this.parkRun(
+      runFromRow(row),
+      config,
+      "Bugbot no devolvió un veredicto aplicable ni pidiéndole la revisión de nuevo"
+    );
   }
 
   private async onBugbotReview(payload: {

@@ -134,6 +134,17 @@ describe("pedir Bugbot para el HEAD", () => {
     expect(bugbotRequestDecision({ ...base, pr: { ...base.pr, state: "closed" } }).request).toBe(false);
   });
 
+  // Re-revisión de PR #53: Bugbot respondió, pero el orquestador no supo leer
+  // su veredicto. Sin repetir el pedido, la run no volvía a moverse.
+  it("forzado, lo repite aunque ya se pidiera para ese commit", () => {
+    expect(bugbotRequestDecision({ ...base, requestedSha: "a5e0f18", force: true }).request).toBe(true);
+  });
+
+  it("forzado, igual respeta un push nuevo o un PR cerrado", () => {
+    expect(bugbotRequestDecision({ ...base, scheduledSha: "viejo", force: true }).request).toBe(false);
+    expect(bugbotRequestDecision({ ...base, pr: { ...base.pr, merged: true }, force: true }).request).toBe(false);
+  });
+
   it("fuera de revisión no hace nada: en `fixing` lo pide la máquina", () => {
     expect(bugbotRequestDecision({ ...base, runState: "fixing" }).request).toBe(false);
   });

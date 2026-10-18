@@ -156,6 +156,8 @@ export async function updateRun(
     incrementAttempts?: boolean;
     lastError?: string;
     bugbotRequestedSha?: string;
+    /** Suma uno a las repeticiones de "bugbot run" sobre el mismo commit. */
+    bugbotRerequest?: boolean;
   }
 ): Promise<void> {
   const sets: string[] = ["updated_at = now()"];
@@ -171,7 +173,19 @@ export async function updateRun(
   if (patch.headSha) add("head_sha", patch.headSha);
   if (patch.lastBugbotReviewId !== undefined) add("last_bugbot_review_id", patch.lastBugbotReviewId);
   if (patch.lastError !== undefined) add("last_error", patch.lastError);
-  if (patch.bugbotRequestedSha) add("bugbot_requested_sha", patch.bugbotRequestedSha);
+  if (patch.bugbotRequestedSha) {
+    // El contador es por commit: un commit nuevo empieza de cero. El CASE ve
+    // el valor anterior de la fila, no el que se está escribiendo.
+    values.push(patch.bugbotRequestedSha);
+    const sha = `$${values.length}`;
+    sets.push(
+      `bugbot_rerequests = CASE WHEN bugbot_requested_sha IS DISTINCT FROM ${sha} THEN 0 ELSE bugbot_rerequests END${
+        patch.bugbotRerequest ? " + 1" : ""
+      }`,
+      `bugbot_requested_sha = ${sha}`,
+      "bugbot_requested_at = now()"
+    );
+  }
   if (patch.incrementAttempts) sets.push("attempts = attempts + 1");
 
   values.push(id);
@@ -206,6 +220,42 @@ export async function findUnreviewedHeads(db: Db, quietMinutes: number): Promise
     repo: r.github_repo as string,
     prNumber: Number(r.pr_number),
     headSha: r.head_sha as string,
+  }));
+}
+
+export type SilentReview = UnreviewedHead & { rerequests: number };
+
+/**
+ * Runs en revisión con "bugbot run" pedido para su HEAD hace rato, sin
+ * veredicto aplicado y sin trabajo pendiente que lo esté procesando: el
+ * veredicto se perdió o no se entendió, y nada más va a despertarlas.
+ */
+export async function findSilentReviews(db: Db, minutes: number): Promise<SilentReview[]> {
+  const res = await db.query(
+    `SELECT r.id, p.github_owner, p.github_repo, r.pr_number, r.head_sha, r.bugbot_rerequests
+       FROM runs r JOIN project_config p USING (plane_project_id)
+      WHERE r.state = 'in_review' AND p.enabled
+        AND r.pr_number IS NOT NULL
+        AND r.bugbot_requested_sha = r.head_sha
+        -- Las runs anteriores a esta columna no la tienen: se usa su último cambio.
+        AND coalesce(r.bugbot_requested_at, r.updated_at) < now() - ($1 || ' minutes')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM jobs j
+           WHERE j.kind LIKE 'github.%'
+             AND j.payload->>'repo' = p.github_repo
+             AND j.payload->>'prNumber' = r.pr_number::text
+             -- Pendiente o corriendo; los agotados quedan bloqueados para siempre.
+             AND (j.locked_at IS NULL OR j.locked_at > now() - interval '10 minutes')
+        )`,
+    [String(minutes)]
+  );
+  return res.rows.map((r) => ({
+    runId: Number(r.id),
+    owner: r.github_owner as string,
+    repo: r.github_repo as string,
+    prNumber: Number(r.pr_number),
+    headSha: r.head_sha as string,
+    rerequests: Number(r.bugbot_rerequests),
   }));
 }
 

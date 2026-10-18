@@ -74,4 +74,10 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_bugbot_review_id BIGINT;
 -- commits nuevos de un PR en borrador: sin saber qué se pidió, un push durante
 -- la revisión dejaba la run esperando un veredicto que nunca llega.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS bugbot_requested_sha TEXT;
+
+-- Cuándo se pidió y cuántas veces se repitió para ese mismo commit. Si Bugbot
+-- revisa pero el veredicto se pierde o no se entiende, nadie más despierta a
+-- la run: el barrido lo vuelve a pedir, con tope, y luego aparca.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS bugbot_requested_at TIMESTAMPTZ;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS bugbot_rerequests SMALLINT NOT NULL DEFAULT 0;
 `;

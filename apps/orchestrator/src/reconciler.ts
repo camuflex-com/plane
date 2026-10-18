@@ -3,7 +3,7 @@
 // en orden. Paralelizarlas rompería justamente lo que se busca.
 import { sleep } from "@/clients/http";
 import type { Db } from "@/db";
-import { findStaleRuns, findUnreviewedHeads } from "@/db/queries";
+import { findSilentReviews, findStaleRuns, findUnreviewedHeads } from "@/db/queries";
 import type { Env } from "@/env";
 import { logger } from "@/logger";
 import { enqueue } from "@/queue";
@@ -47,7 +47,32 @@ async function reconcileOnce(db: Db, env: Env): Promise<void> {
       headSha: head.headSha,
     });
   }
+
+  // Bugbot revisó pero el veredicto no se aplicó: se pide otra vez, con tope.
+  for (const silent of await findSilentReviews(db, SILENT_REVIEW_MINUTES)) {
+    if (silent.rerequests >= MAX_BUGBOT_REREQUESTS) {
+      logger.warn("Bugbot sin veredicto tras repetir, se aparca", { runId: silent.runId, prNumber: silent.prNumber });
+      await enqueue(db, "reconcile.bugbot_silent", { runId: silent.runId });
+      continue;
+    }
+    logger.warn("revisión sin veredicto aplicado, se repite bugbot run", {
+      runId: silent.runId,
+      prNumber: silent.prNumber,
+      rerequests: silent.rerequests,
+    });
+    await enqueue(db, "github.ensure_bugbot", {
+      owner: silent.owner,
+      repo: silent.repo,
+      prNumber: silent.prNumber,
+      headSha: silent.headSha,
+      force: true,
+    });
+  }
 }
 
 /** Margen para que el job programado tras el sync actúe antes que el barrido. */
 const UNREVIEWED_QUIET_MINUTES = 10;
+/** Bugbot tarda unos 5 minutos; 20 sin veredicto aplicado es que se perdió. */
+const SILENT_REVIEW_MINUTES = 20;
+/** Repeticiones de "bugbot run" sobre el mismo commit antes de aparcar. */
+export const MAX_BUGBOT_REREQUESTS = 2;

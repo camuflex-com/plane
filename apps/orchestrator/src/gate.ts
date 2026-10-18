@@ -113,6 +113,8 @@ export type BugbotRequestInput = {
   scheduledSha: string;
   /** Último commit para el que ya se pidió "bugbot run". */
   requestedSha: string | null;
+  /** Repetir aunque ya se pidiera: el veredicto anterior no llegó a aplicarse. */
+  force?: boolean;
 };
 
 /**
@@ -127,6 +129,8 @@ export function bugbotRequestDecision(input: BugbotRequestInput): { request: boo
   if (input.runState !== "in_review") return { request: false, reason: `run en ${input.runState}` };
   if (input.pr.merged || input.pr.state !== "open") return { request: false, reason: "PR cerrado" };
   if (input.pr.headSha !== input.scheduledSha) return { request: false, reason: "hubo otro push" };
-  if (input.requestedSha === input.pr.headSha) return { request: false, reason: "ya pedido para este commit" };
+  if (!input.force && input.requestedSha === input.pr.headSha) {
+    return { request: false, reason: "ya pedido para este commit" };
+  }
   return { request: true, reason: "HEAD sin revisión pedida" };
 }
