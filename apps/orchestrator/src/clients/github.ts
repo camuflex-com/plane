@@ -81,6 +81,56 @@ export class GitHubClient {
   }
 
   /**
+   * Hilos de revisión sin resolver del PR, con su primer comentario.
+   *
+   * Cuando Bugbot vuelve a revisar y los problemas anteriores siguen ahí, no
+   * los repite: su review nueva dice "N issues from previous reviews remain
+   * unresolved" sin comentarios en línea. Los problemas viven en los hilos de
+   * reviews anteriores, y solo GraphQL dice cuáles siguen abiertos.
+   */
+  async listUnresolvedThreads(
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<{ path: string; line: number | null; author: string; body: string }[]> {
+    type Response = {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: {
+              nodes?: {
+                isResolved: boolean;
+                path: string;
+                line: number | null;
+                comments?: { nodes?: { author?: { login?: string }; body?: string }[] };
+              }[];
+            };
+          };
+        };
+      };
+      errors?: { message: string }[];
+    };
+    const response = await requestJson<Response>(`${this.env.GITHUB_API_URL}/graphql`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({
+        query:
+          "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved path line comments(first:1){nodes{author{login} body}}}}}}}",
+        variables: { o: owner, r: repo, n: prNumber },
+      }),
+    });
+    if (response?.errors?.length) {
+      throw new Error(`GraphQL: ${response.errors.map((e) => e.message).join("; ")}`);
+    }
+    return (response?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [])
+      .filter((t) => !t.isResolved)
+      .map((t) => {
+        const first = t.comments?.nodes?.[0];
+        return { path: t.path, line: t.line, author: first?.author?.login ?? "", body: first?.body ?? "" };
+      });
+  }
+
+  /**
    * Saca un PR de borrador.
    *
    * La API REST no permite hacerlo; solo la mutación GraphQL. Se llama

@@ -431,10 +431,15 @@ export class Executor {
 
     const findings =
       payload.reviewId > 0 ? await this.collectFindingsForReview(config, payload.prNumber, payload.reviewId) : [];
+    const unresolved =
+      (parseUnresolvedCount(payload.body) ?? 0) > 0
+        ? await this.collectUnresolvedFindings(config, payload.prNumber)
+        : [];
     const interpreted = interpretBugbotReview({
       state: payload.state,
       body: payload.body,
       findings,
+      unresolved,
     });
 
     if (interpreted.kind === "ignore") {
@@ -641,6 +646,21 @@ export class Executor {
     }
   }
 
+  /** Hilos de Bugbot de reviews anteriores que siguen abiertos. */
+  private async collectUnresolvedFindings(config: ProjectConfig, prNumber: number): Promise<string[]> {
+    try {
+      const threads = await this.github.listUnresolvedThreads(config.githubOwner, config.githubRepo, prNumber);
+      return threads
+        .filter((t) => isBugbotGraphqlAuthor(t.author))
+        .map((t) => `${t.path}${t.line ? `:${t.line}` : ""} — ${cleanFinding(t.body)}`);
+    } catch (error) {
+      // Sin el detalle, el veredicto sigue siendo "hay problemas": el agente
+      // recibe el aviso genérico y los hilos están en el PR.
+      logger.warn("no se pudieron leer los hilos sin resolver", { prNumber, error: String(error) });
+      return [];
+    }
+  }
+
   private async onStale(payload: { runId: number; minutes: number }): Promise<void> {
     const res = await this.db.query(`SELECT * FROM runs WHERE id = $1`, [payload.runId]);
     const row = res.rows[0];
@@ -701,6 +721,9 @@ export const isBugbotCheck = (name: string | undefined) => /bugbot/i.test(name ?
 export const isBugbot = (login: string | undefined) =>
   /bugbot/i.test(login ?? "") || /^cursor\[bot\]$/i.test(login ?? "");
 
+/** En GraphQL las apps aparecen sin el sufijo: `cursor[bot]` es `cursor`. */
+export const isBugbotGraphqlAuthor = (login: string | undefined) => login === "cursor" || isBugbot(login);
+
 export type BugbotReviewKind = "success" | "findings" | "ignore";
 
 /**
@@ -712,7 +735,13 @@ export type BugbotReviewKind = "success" | "findings" | "ignore";
  * - CHANGES_REQUESTED, comentarios en línea, o "found N>0" → corregir
  * - Cualquier otra cosa (review incompleta) → ignorar y esperar el evento real
  */
-export function interpretBugbotReview(input: { state: string; body: string; findings: string[] }): {
+export function interpretBugbotReview(input: {
+  state: string;
+  body: string;
+  findings: string[];
+  /** Problemas de reviews anteriores que siguen abiertos. */
+  unresolved?: string[];
+}): {
   kind: BugbotReviewKind;
   findings: string[];
 } {
@@ -732,6 +761,19 @@ export function interpretBugbotReview(input: { state: string; body: string; find
     return { kind: "findings", findings };
   }
 
+  // "found no new issues! N issues from previous reviews remain unresolved":
+  // nada nuevo, pero lo anterior sigue roto. Es un veredicto con hallazgos,
+  // no un silencio. Antes caía en `ignore` y la run esperaba para siempre.
+  const unresolvedCount = parseUnresolvedCount(input.body);
+  if (unresolvedCount && unresolvedCount > 0) {
+    const pending = input.unresolved?.length
+      ? input.unresolved
+      : [
+          `${unresolvedCount} problema(s) de revisiones anteriores siguen sin resolver; revisa los hilos abiertos del PR.`,
+        ];
+    return { kind: "findings", findings: [...findings, ...pending] };
+  }
+
   if (count === 0) return { kind: "success", findings: [] };
   if (findings.length > 0) return { kind: "findings", findings };
   return { kind: "ignore", findings: [] };
@@ -740,6 +782,12 @@ export function interpretBugbotReview(input: { state: string; body: string; find
 /** Extrae el "found N potential issues" del resumen de Bugbot. */
 export function parseFoundCount(body: string): number | null {
   const match = body.match(/found\s+(\d+)\s+potential issues/i);
+  return match ? Number(match[1]) : null;
+}
+
+/** Extrae el "N issues from previous reviews remain unresolved". */
+export function parseUnresolvedCount(body: string): number | null {
+  const match = body.match(/(\d+)\s+issues?\s+from\s+previous\s+reviews?\s+remains?\s+unresolved/i);
   return match ? Number(match[1]) : null;
 }
 
